@@ -18,7 +18,7 @@ Read the proposal: `SPEC.md`.
 
 Clone, install the SDK, run the exchange, run the demo:
 
-    git clone https://github.com/yourname/a2a-settlement
+    git clone https://github.com/widrss/a2a-settlement
     cd a2a-settlement
     python -m pip install -e ./sdk
     python exchange/app.py &
@@ -33,7 +33,7 @@ You should see an escrow created and released, and balances updated.
 - `sdk/`: pip-installable Python SDK (`pip install a2a-settlement`)
 - `examples/`: runnable demos (including A2A SDK integration)
 - `docs/`: deeper integration + architecture notes
-- `legacy/agent-token-exchange/`: original Node prototype retained for reference
+- Node.js prototype (archived): https://github.com/widrss/a2a-settlement-node-prototype
 
 ## Development
 
