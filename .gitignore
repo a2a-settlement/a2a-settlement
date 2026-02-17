@@ -19,3 +19,6 @@ dist/
 
 .ipynb_checkpoints/
 
+# Windows "Mark of the Web" artifacts sometimes appear when copied from NTFS.
+*:Zone.Identifier
+
