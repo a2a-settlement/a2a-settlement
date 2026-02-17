@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2a-settlement"
+version = "0.1.0"
+description = "A2A Settlement Extension (SDK)"
+readme = "../README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+examples = [
+  "a2a-sdk[http-server]>=0.3",
+]
+dev = [
+  "pytest>=7.0",
+]
+
+[tool.setuptools]
+packages = ["a2a_settlement"]
+

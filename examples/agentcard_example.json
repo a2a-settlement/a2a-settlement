@@ -1,0 +1,41 @@
+{
+  "name": "Sentiment Analysis Agent",
+  "version": "1.0.0",
+  "description": "Analyzes text sentiment with confidence scoring.",
+  "url": "http://localhost:8001",
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "capabilities": {
+    "streaming": true,
+    "extensions": [
+      {
+        "uri": "https://a2a-settlement.org/extensions/settlement/v1",
+        "description": "Accepts token-based payment via A2A Settlement Exchange",
+        "required": false,
+        "params": {
+          "exchangeUrl": "http://127.0.0.1:3000/v1",
+          "accountId": "provider-uuid-on-exchange",
+          "pricing": {
+            "sentiment-analysis": {
+              "baseTokens": 10,
+              "model": "per-request",
+              "currency": "ATE"
+            }
+          },
+          "reputation": 0.87,
+          "availability": 0.95
+        }
+      }
+    ]
+  },
+  "skills": [
+    {
+      "id": "sentiment-analysis",
+      "name": "Sentiment Analysis",
+      "description": "Analyzes text sentiment with confidence scoring.",
+      "tags": ["sentiment", "nlp", "text-classification"],
+      "examples": ["Analyze the sentiment of this earnings call transcript"]
+    }
+  ]
+}
+

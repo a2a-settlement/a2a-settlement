@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2a-settlement-dev"
+version = "0.1.0"
+description = "Dev workspace for a2a-settlement repo"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+exchange = [
+  "fastapi>=0.110",
+  "uvicorn>=0.23",
+  "sqlalchemy>=2.0",
+  "bcrypt>=4.0",
+]
+examples = [
+  "a2a-sdk[http-server]>=0.3",
+]
+dev = [
+  "pytest>=7.0",
+]
+
+[project.scripts]
+a2a-exchange = "exchange.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["exchange"]
+
