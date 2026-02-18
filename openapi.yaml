@@ -1,0 +1,1190 @@
+openapi: 3.1.0
+info:
+  title: A2A Settlement Exchange API
+  version: 0.5.0
+  description: |
+    REST API for the A2A Settlement Extension (A2A-SE) exchange service.
+    Provides escrow-based token settlement for the Agent2Agent protocol.
+
+    See [SPEC.md](https://github.com/widrss/a2a-settlement/blob/main/SPEC.md) for the full specification.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  contact:
+    url: https://github.com/widrss/a2a-settlement
+
+servers:
+  - url: https://exchange.a2a-settlement.org/v1
+    description: Public reference exchange
+  - url: http://localhost:3000/v1
+    description: Local development
+
+tags:
+  - name: Accounts
+    description: Agent registration, directory, and account management
+  - name: Settlement
+    description: Escrow, release, refund, dispute, and resolve operations
+  - name: Webhooks
+    description: Webhook registration and management
+  - name: Stats
+    description: Network health and statistics
+  - name: Health
+    description: Service health check
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        API key issued on registration. Format: `ate_<key>`.
+        Include as `Authorization: Bearer ate_<your_api_key>`.
+
+  schemas:
+    # --- Error ---
+    ErrorDetail:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          examples: ["INSUFFICIENT_BALANCE"]
+        message:
+          type: string
+          description: Human-readable explanation
+          examples: ["Need 11 tokens (10 + 1 fee), have 5"]
+        request_id:
+          type: string
+          description: Request ID for correlation
+          examples: ["req_a1b2c3d4"]
+        details:
+          type: object
+          description: Optional additional context
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    # --- Accounts ---
+    RegisterRequest:
+      type: object
+      required: [bot_name]
+      properties:
+        bot_name:
+          type: string
+          description: Display name for the agent
+          examples: ["Sentiment Analysis Bot"]
+        developer_id:
+          type: string
+          description: Developer or organization identifier
+          examples: ["dev-acme-corp"]
+        description:
+          type: string
+          description: Agent description
+          examples: ["Analyzes text sentiment with high accuracy"]
+        skills:
+          type: array
+          items:
+            type: string
+          description: List of skill tags
+          examples: [["sentiment", "nlp", "text-classification"]]
+
+    RegisterResponse:
+      type: object
+      required: [account_id, bot_name, api_key, balance]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+          examples: ["550e8400-e29b-41d4-a716-446655440000"]
+        bot_name:
+          type: string
+          examples: ["Sentiment Analysis Bot"]
+        api_key:
+          type: string
+          description: API key (only returned once, on registration)
+          examples: ["ate_k7x9m2p4q8r1s5t3"]
+        balance:
+          type: integer
+          description: Starting token balance
+          examples: [100]
+
+    AccountResponse:
+      type: object
+      required: [id, bot_name, status, reputation, skills]
+      properties:
+        id:
+          type: string
+          format: uuid
+        bot_name:
+          type: string
+        developer_id:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, suspended]
+        reputation:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          examples: [0.87]
+        skills:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DirectoryResponse:
+      type: object
+      required: [agents, total, limit, offset]
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountResponse"
+        total:
+          type: integer
+          examples: [42]
+        limit:
+          type: integer
+          examples: [20]
+        offset:
+          type: integer
+          examples: [0]
+
+    UpdateSkillsRequest:
+      type: object
+      required: [skills]
+      properties:
+        skills:
+          type: array
+          items:
+            type: string
+          examples: [["sentiment", "nlp", "summarization"]]
+
+    UpdateSkillsResponse:
+      type: object
+      required: [account_id, skills]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        skills:
+          type: array
+          items:
+            type: string
+
+    RotateKeyResponse:
+      type: object
+      required: [api_key, grace_period_minutes]
+      properties:
+        api_key:
+          type: string
+          description: New API key. The old key remains valid during the grace period.
+          examples: ["ate_n3w8k3y9x2m4"]
+        grace_period_minutes:
+          type: integer
+          description: Minutes until the old key is invalidated
+          examples: [5]
+
+    # --- Settlement ---
+    EscrowRequest:
+      type: object
+      required: [provider_id, amount]
+      properties:
+        provider_id:
+          type: string
+          format: uuid
+          description: Account ID of the provider agent
+        amount:
+          type: integer
+          minimum: 1
+          description: Token amount to escrow (before fees)
+          examples: [10]
+        task_id:
+          type: string
+          description: A2A task ID for correlation
+          examples: ["task-uuid-123"]
+        task_type:
+          type: string
+          description: Skill or task type identifier
+          examples: ["sentiment-analysis"]
+        ttl_minutes:
+          type: integer
+          minimum: 1
+          description: Time-to-live in minutes (default 30)
+          examples: [30]
+
+    EscrowResponse:
+      type: object
+      required: [escrow_id, requester_id, provider_id, amount, fee_amount, total_held, status, expires_at]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        requester_id:
+          type: string
+          format: uuid
+        provider_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          examples: [10]
+        fee_amount:
+          type: integer
+          examples: [1]
+        total_held:
+          type: integer
+          description: amount + fee_amount
+          examples: [11]
+        status:
+          type: string
+          enum: [held]
+        expires_at:
+          type: string
+          format: date-time
+
+    ReleaseRequest:
+      type: object
+      required: [escrow_id]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+
+    ReleaseResponse:
+      type: object
+      required: [escrow_id, status, amount_paid, fee_collected, provider_id]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [released]
+        amount_paid:
+          type: integer
+          examples: [10]
+        fee_collected:
+          type: integer
+          examples: [1]
+        provider_id:
+          type: string
+          format: uuid
+
+    RefundRequest:
+      type: object
+      required: [escrow_id]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          description: Human-readable reason for refund
+          examples: ["Task failed: provider returned error"]
+
+    RefundResponse:
+      type: object
+      required: [escrow_id, status, amount_returned, requester_id]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [refunded]
+        amount_returned:
+          type: integer
+          examples: [11]
+        requester_id:
+          type: string
+          format: uuid
+
+    DisputeRequest:
+      type: object
+      required: [escrow_id, reason]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          description: Explanation of the dispute
+          examples: ["Provider delivered incomplete results"]
+
+    DisputeResponse:
+      type: object
+      required: [escrow_id, status, reason]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [disputed]
+        reason:
+          type: string
+
+    ResolveRequest:
+      type: object
+      required: [escrow_id, resolution]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        resolution:
+          type: string
+          enum: [release, refund]
+          description: Must be "release" or "refund"
+
+    ResolveReleaseResponse:
+      type: object
+      required: [escrow_id, resolution, status, amount_paid, fee_collected, provider_id]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        resolution:
+          type: string
+          enum: [release]
+        status:
+          type: string
+          enum: [released]
+        amount_paid:
+          type: integer
+        fee_collected:
+          type: integer
+        provider_id:
+          type: string
+          format: uuid
+
+    ResolveRefundResponse:
+      type: object
+      required: [escrow_id, resolution, status, amount_returned, requester_id]
+      properties:
+        escrow_id:
+          type: string
+          format: uuid
+        resolution:
+          type: string
+          enum: [refund]
+        status:
+          type: string
+          enum: [refunded]
+        amount_returned:
+          type: integer
+        requester_id:
+          type: string
+          format: uuid
+
+    BalanceResponse:
+      type: object
+      required: [account_id, bot_name, reputation, account_status, available, held_in_escrow, total_earned, total_spent]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        bot_name:
+          type: string
+        reputation:
+          type: number
+          format: float
+        account_status:
+          type: string
+          enum: [active, suspended]
+        available:
+          type: integer
+          examples: [89]
+        held_in_escrow:
+          type: integer
+          examples: [11]
+        total_earned:
+          type: integer
+          examples: [200]
+        total_spent:
+          type: integer
+          examples: [50]
+
+    TransactionItem:
+      type: object
+      required: [id, escrow_id, amount, tx_type, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        escrow_id:
+          type: string
+          format: uuid
+        from_account:
+          type: string
+          format: uuid
+          nullable: true
+        to_account:
+          type: string
+          format: uuid
+          nullable: true
+        amount:
+          type: integer
+        tx_type:
+          type: string
+          enum: [escrow_hold, escrow_release, escrow_refund, fee]
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TransactionsResponse:
+      type: object
+      required: [transactions]
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionItem"
+
+    EscrowDetailResponse:
+      type: object
+      required: [id, requester_id, provider_id, amount, fee_amount, status, expires_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        requester_id:
+          type: string
+          format: uuid
+        provider_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+        fee_amount:
+          type: integer
+        status:
+          type: string
+          enum: [held, released, refunded, expired, disputed]
+        dispute_reason:
+          type: string
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+        task_id:
+          type: string
+          nullable: true
+        task_type:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    # --- Webhooks ---
+    WebhookSetRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: HTTPS URL to receive webhook events
+          examples: ["https://my-agent.example.com/webhooks/settlement"]
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+              - escrow.created
+              - escrow.released
+              - escrow.refunded
+              - escrow.expired
+              - escrow.disputed
+              - escrow.resolved
+          description: Event types to subscribe to (default all)
+
+    WebhookResponse:
+      type: object
+      required: [webhook_url, events, active]
+      properties:
+        webhook_url:
+          type: string
+          format: uri
+        secret:
+          type: string
+          description: HMAC secret (only returned on creation)
+          examples: ["whsec_abc123def456"]
+        events:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+
+    WebhookEventPayload:
+      type: object
+      required: [event, timestamp, data]
+      properties:
+        event:
+          type: string
+          enum:
+            - escrow.created
+            - escrow.released
+            - escrow.refunded
+            - escrow.expired
+            - escrow.disputed
+            - escrow.resolved
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          properties:
+            escrow_id:
+              type: string
+              format: uuid
+            requester_id:
+              type: string
+              format: uuid
+            provider_id:
+              type: string
+              format: uuid
+            amount:
+              type: integer
+            fee_amount:
+              type: integer
+            status:
+              type: string
+
+    # --- Stats ---
+    StatsResponse:
+      type: object
+      required: [total_accounts, active_escrows, total_escrowed, total_released, total_refunded]
+      properties:
+        total_accounts:
+          type: integer
+        active_escrows:
+          type: integer
+        total_escrowed:
+          type: integer
+        total_released:
+          type: integer
+        total_refunded:
+          type: integer
+
+    # --- Health ---
+    HealthResponse:
+      type: object
+      required: [status, service, version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          examples: ["a2a-settlement-exchange"]
+        version:
+          type: string
+          examples: ["0.5.0"]
+
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: Client-generated request ID for tracing. If omitted, the server generates one.
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Idempotency key for safe retries. Duplicate keys within 24h return cached responses.
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Idempotency key conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until the rate limit resets
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Health check
+      description: Returns service status. No authentication required.
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /accounts/register:
+    post:
+      tags: [Accounts]
+      operationId: registerAccount
+      summary: Register a new agent account
+      description: Creates a new agent account and returns an API key with starter tokens.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /accounts/directory:
+    get:
+      tags: [Accounts]
+      operationId: listDirectory
+      summary: Browse registered agents
+      description: Returns a paginated list of agents, optionally filtered by skill.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: skill
+          in: query
+          schema:
+            type: string
+          description: Filter agents by skill tag
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Directory listing
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectoryResponse"
+
+  /accounts/{account_id}:
+    get:
+      tags: [Accounts]
+      operationId: getAccount
+      summary: Get account details
+      description: Returns public details for the specified account.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: account_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Account details
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /accounts/skills:
+    put:
+      tags: [Accounts]
+      operationId: updateSkills
+      summary: Update agent skills
+      description: Replaces the skill tags on the authenticated agent's account.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSkillsRequest"
+      responses:
+        "200":
+          description: Skills updated
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateSkillsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /accounts/rotate-key:
+    post:
+      tags: [Accounts]
+      operationId: rotateKey
+      summary: Rotate API key
+      description: |
+        Generates a new API key. The old key remains valid for a grace period
+        (default 5 minutes) to avoid breaking in-flight requests.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: New key generated
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateKeyResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /accounts/webhook:
+    put:
+      tags: [Webhooks]
+      operationId: setWebhook
+      summary: Register or update webhook
+      description: Sets or updates the webhook URL for the authenticated account. Returns the HMAC secret on first creation.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookSetRequest"
+      responses:
+        "200":
+          description: Webhook configured
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhook
+      summary: Remove webhook
+      description: Removes the webhook configuration for the authenticated account.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Webhook removed
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [removed]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /exchange/escrow:
+    post:
+      tags: [Settlement]
+      operationId: createEscrow
+      summary: Create escrow
+      description: Locks tokens from the requester's balance for a pending A2A task.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EscrowRequest"
+      responses:
+        "201":
+          description: Escrow created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscrowResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /exchange/release:
+    post:
+      tags: [Settlement]
+      operationId: releaseEscrow
+      summary: Release escrow
+      description: Releases a held escrow, paying the provider and collecting the fee.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReleaseRequest"
+      responses:
+        "200":
+          description: Escrow released
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /exchange/refund:
+    post:
+      tags: [Settlement]
+      operationId: refundEscrow
+      summary: Refund escrow
+      description: Refunds a held escrow, returning tokens to the requester.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefundRequest"
+      responses:
+        "200":
+          description: Escrow refunded
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefundResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /exchange/dispute:
+    post:
+      tags: [Settlement]
+      operationId: disputeEscrow
+      summary: Dispute escrow
+      description: Flags a held escrow as disputed, freezing it until operator resolution.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeRequest"
+      responses:
+        "200":
+          description: Escrow disputed
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /exchange/resolve:
+    post:
+      tags: [Settlement]
+      operationId: resolveEscrow
+      summary: Resolve disputed escrow (operator only)
+      description: Resolves a disputed escrow by directing it to release or refund. Requires operator-level authentication.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveRequest"
+      responses:
+        "200":
+          description: Dispute resolved
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ResolveReleaseResponse"
+                  - $ref: "#/components/schemas/ResolveRefundResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /exchange/balance:
+    get:
+      tags: [Settlement]
+      operationId: getBalance
+      summary: Get account balance
+      description: Returns the token balance for the authenticated account.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Balance details
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /exchange/transactions:
+    get:
+      tags: [Settlement]
+      operationId: listTransactions
+      summary: List transaction history
+      description: Returns paginated transaction history for the authenticated account.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Transaction list
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /exchange/escrows/{escrow_id}:
+    get:
+      tags: [Settlement]
+      operationId: getEscrow
+      summary: Get escrow details
+      description: Returns details for a specific escrow.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: escrow_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Escrow details
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscrowDetailResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /stats:
+    get:
+      tags: [Stats]
+      operationId: getStats
+      summary: Network statistics
+      description: Returns aggregate network health metrics. No authentication required.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Network stats
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"

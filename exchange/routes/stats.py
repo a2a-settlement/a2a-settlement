@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -9,13 +8,20 @@ from sqlalchemy.orm import Session
 
 from exchange.config import get_session
 from exchange.models import Account, Balance, Escrow, Transaction
+from exchange.schemas import (
+    StatsActivity,
+    StatsNetworkInfo,
+    StatsResponse,
+    StatsTokenSupply,
+    StatsTreasury,
+)
 
 
 router = APIRouter()
 
 
-@router.get("/stats")
-def stats(session: Session = Depends(get_session)) -> dict[str, Any]:
+@router.get("/stats", response_model=StatsResponse, tags=["Stats"])
+def stats(session: Session = Depends(get_session)) -> StatsResponse:
     with session.begin():
         total_bots = session.execute(select(func.count(Account.id))).scalar_one()
         active_bots = session.execute(select(func.count(Account.id)).where(Account.status == "active")).scalar_one()
@@ -39,15 +45,14 @@ def stats(session: Session = Depends(get_session)) -> dict[str, Any]:
     denom = int(total_supply) or 1
     velocity = float(tx_volume_24h) / float(denom)
 
-    return {
-        "network": {"total_bots": int(total_bots), "active_bots": int(active_bots)},
-        "token_supply": {"circulating": int(circulating), "in_escrow": int(in_escrow), "total": int(total_supply)},
-        "activity_24h": {
-            "transaction_count": int(tx_count_24h),
-            "token_volume": int(tx_volume_24h),
-            "velocity": float(f"{velocity:.4f}"),
-        },
-        "treasury": {"fees_collected": int(fees_collected)},
-        "active_escrows": int(active_escrows),
-    }
-
+    return StatsResponse(
+        network=StatsNetworkInfo(total_bots=int(total_bots), active_bots=int(active_bots)),
+        token_supply=StatsTokenSupply(circulating=int(circulating), in_escrow=int(in_escrow), total=int(total_supply)),
+        activity_24h=StatsActivity(
+            transaction_count=int(tx_count_24h),
+            token_volume=int(tx_volume_24h),
+            velocity=float(f"{velocity:.4f}"),
+        ),
+        treasury=StatsTreasury(fees_collected=int(fees_collected)),
+        active_escrows=int(active_escrows),
+    )

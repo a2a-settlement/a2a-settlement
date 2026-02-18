@@ -1,8 +1,11 @@
 # A2A Settlement Extension (A2A-SE)
 
-Economic settlement for the Agent2Agent (A2A) protocol.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
+[![Spec: v0.5.0](https://img.shields.io/badge/spec-v0.5.0-green.svg)](SPEC.md)
+[![Node 18+](https://img.shields.io/badge/node-18%2B-green.svg)](sdk-ts/)
 
-When two agents discover each other through A2A and one performs work for the other, how does payment happen? This extension adds escrow-based token settlement to A2A's existing task lifecycle using A2A's native extension mechanism. Zero modifications to A2A core. The exchange is an interface, not a service -- agents can point to any conforming implementation (hosted, self-hosted, or on-chain) via the `exchangeUrl` field in their AgentCard.
+**A2A-SE adds escrow-based payment to the A2A protocol in under 100 lines of integration code.** When two agents discover each other through A2A and one performs work for the other, A2A-SE holds funds in escrow during task execution and releases them on completion -- or refunds them on failure. Zero modifications to A2A core. Currency-agnostic. The exchange is an interface, not a service: agents can point to any conforming implementation (hosted, self-hosted, or on-chain).
 
 ```
 RequesterAgent  <---- A2A ---->  ProviderAgent
@@ -12,40 +15,96 @@ RequesterAgent  <---- A2A ---->  ProviderAgent
           escrow / release / refund
 ```
 
-Read the proposal: `SPEC.md`.
-
 ## Get started in 60 seconds
 
-Clone, install the SDK, run the exchange, run the demo:
-
-    git clone https://github.com/widrss/a2a-settlement
-    cd a2a-settlement
-    python -m pip install -e ./sdk
-    python exchange/app.py &
-    python examples/quickstart.py
+```bash
+git clone https://github.com/widrss/a2a-settlement
+cd a2a-settlement
+pip install -e ./sdk
+python exchange/app.py &
+python examples/quickstart.py
+```
 
 You should see an escrow created and released, and balances updated.
 
+## SDKs
+
+| Language | Package | Install |
+|----------|---------|---------|
+| Python | `a2a-settlement` | `pip install -e ./sdk` |
+| TypeScript/JS | `@a2a-settlement/sdk` | `cd sdk-ts && npm install` |
+
+Both SDKs mirror the same method signatures. See [sdk/](sdk/) and [sdk-ts/](sdk-ts/) for docs.
+
+## Deploy your own exchange
+
+**Docker Compose** (recommended):
+
+```bash
+docker compose up -d
+curl http://localhost:3000/health
+```
+
+**Fly.io**:
+
+```bash
+fly launch --copy-config
+fly postgres create --name a2a-exchange-db
+fly postgres attach a2a-exchange-db
+fly deploy
+```
+
+**Railway**: Fork the repo, connect Railway, add the PostgreSQL plugin, deploy.
+
+See [docs/self-hosting.md](docs/self-hosting.md) for full environment variable reference.
+
 ## Repo structure
 
-- `SPEC.md`: the extension specification (draft v0.1.0)
-- `exchange/`: FastAPI + SQLAlchemy settlement exchange (SQLite dev, Postgres prod)
-- `sdk/`: pip-installable Python SDK (`pip install a2a-settlement`)
-- `examples/`: runnable demos (including A2A SDK integration)
-- `docs/`: deeper integration + architecture notes
-- Node.js prototype (archived): https://github.com/widrss/a2a-settlement-node-prototype
+- `SPEC.md` -- the extension specification (v0.5.0)
+- `openapi.yaml` -- OpenAPI 3.1 spec for the exchange API
+- `exchange/` -- FastAPI + SQLAlchemy settlement exchange (SQLite dev, Postgres prod)
+- `sdk/` -- pip-installable Python SDK
+- `sdk-ts/` -- npm-installable TypeScript/JavaScript SDK
+- `examples/` -- runnable demos (including A2A SDK integration)
+- `docs/` -- architecture, integration guide, pricing models, self-hosting
+- `Dockerfile` + `docker-compose.yml` -- containerized deployment
+- `fly.toml` + `railway.json` -- one-click cloud deploy configs
 
-## How A2A-SE relates to x402
+## How A2A-SE compares to AP2 and x402
 
-x402 is pay-per-call (an access gate). A2A-SE is task settlement (escrow for work-in-progress). They're complementary layers, not alternatives. An agent can use x402 for discovery gating and A2A-SE for multi-step task payment. See Section 10.1 of the spec for the full hybrid flow.
+These three protocols address different layers of the agent payment stack. They are complementary, not competing.
+
+- **x402** is an access gate: pay-per-call micropayments to talk to an agent. Think of it as a toll booth.
+- **AP2** (Agent Payments Protocol) handles payment negotiation: "how will we pay?" It defines flows for agents to agree on payment methods and amounts.
+- **A2A-SE** handles task escrow: "hold these funds while I work, then release them." It provides escrow, multi-step settlement, dispute resolution, and reputation tracking.
+
+| Concern | AP2 | x402 | A2A-SE |
+|---------|-----|------|--------|
+| Payment negotiation | Yes | -- | Lightweight |
+| Access gating | -- | Yes | -- |
+| Task escrow | -- | -- | Yes |
+| Dispute resolution | -- | -- | Yes |
+| Reputation | -- | -- | Yes |
+| Multi-turn tasks | -- | -- | Yes |
+
+An agent can use all three: x402 gates discovery, AP2 negotiates terms, A2A-SE escrows the payment.
+
+## API documentation
+
+When the exchange is running, visit:
+- **Swagger UI**: http://localhost:3000/docs
+- **ReDoc**: http://localhost:3000/redoc
+- **OpenAPI JSON**: http://localhost:3000/openapi.json
+
+Or see `openapi.yaml` in the repo root for the normative spec.
 
 ## Development
 
-Run tests:
-
-    pytest -q
+```bash
+pip install -e ".[exchange,examples,dev]"
+pytest -q
+```
 
 ## License
 
 MIT. See `LICENSE`.
-

@@ -1,0 +1,37 @@
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+
+app = "a2a-settlement-exchange"
+primary_region = "iad"
+
+[build]
+
+[env]
+  A2A_EXCHANGE_HOST = "0.0.0.0"
+  A2A_EXCHANGE_PORT = "3000"
+  A2A_EXCHANGE_AUTO_CREATE_SCHEMA = "true"
+  A2A_EXCHANGE_FEE_PERCENT = "3.0"
+  A2A_EXCHANGE_STARTER_TOKENS = "100"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 250
+    soft_limit = 200
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 3000
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"

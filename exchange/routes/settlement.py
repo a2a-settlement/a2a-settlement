@@ -2,16 +2,32 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from exchange.auth import authenticate_bot
 from exchange.config import get_session, settings
 from exchange.models import Account, Balance, Escrow, Transaction
+from exchange.schemas import (
+    BalanceResponse,
+    DisputeRequest,
+    DisputeResponse,
+    EscrowDetailResponse,
+    EscrowRequest,
+    EscrowResponse,
+    RefundRequest,
+    RefundResponse,
+    ReleaseRequest,
+    ReleaseResponse,
+    ResolveRefundResponse,
+    ResolveReleaseResponse,
+    ResolveRequest,
+    TransactionItem,
+    TransactionsResponse,
+)
+from exchange.webhooks import fire_webhook_event
 
 
 router = APIRouter()
@@ -26,7 +42,6 @@ def _fee_amount(amount: int) -> int:
 
 
 def _lock(stmt):
-    # SQLite ignores FOR UPDATE; Postgres uses row-level locks.
     return stmt.with_for_update()
 
 
@@ -61,20 +76,12 @@ def _expire_stale_escrows(session: Session) -> int:
     return expired_count
 
 
-class EscrowRequest(BaseModel):
-    provider_id: str
-    amount: int
-    task_id: str | None = None
-    task_type: str | None = None
-    ttl_minutes: int | None = None
-
-
-@router.post("/exchange/escrow", status_code=201)
+@router.post("/exchange/escrow", status_code=201, response_model=EscrowResponse, tags=["Settlement"])
 def create_escrow(
     req: EscrowRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> EscrowResponse:
     if req.amount < settings.min_escrow or req.amount > settings.max_escrow:
         raise HTTPException(status_code=400, detail=f"Amount must be between {settings.min_escrow} and {settings.max_escrow}")
     if current["id"] == req.provider_id:
@@ -131,28 +138,26 @@ def create_escrow(
             )
         )
 
-    return {
-        "escrow_id": escrow.id,
-        "requester_id": current["id"],
-        "provider_id": req.provider_id,
-        "amount": int(req.amount),
-        "fee_amount": int(fee_amount),
-        "total_held": int(total_hold),
-        "status": escrow.status,
-        "expires_at": escrow.expires_at,
-    }
+    fire_webhook_event(session, escrow, "escrow.created")
+
+    return EscrowResponse(
+        escrow_id=escrow.id,
+        requester_id=current["id"],
+        provider_id=req.provider_id,
+        amount=int(req.amount),
+        fee_amount=int(fee_amount),
+        total_held=int(total_hold),
+        status=escrow.status,
+        expires_at=escrow.expires_at,
+    )
 
 
-class ReleaseRequest(BaseModel):
-    escrow_id: str
-
-
-@router.post("/exchange/release")
+@router.post("/exchange/release", response_model=ReleaseResponse, tags=["Settlement"])
 def release(
     req: ReleaseRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> ReleaseResponse:
     with session.begin():
         _expire_stale_escrows(session)
 
@@ -210,26 +215,23 @@ def release(
             provider.reputation = min(1.0, float(provider.reputation) * 0.9 + 1.0 * 0.1)
             session.add(provider)
 
-    return {
-        "escrow_id": req.escrow_id,
-        "status": "released",
-        "amount_paid": int(escrow.amount),
-        "fee_collected": int(escrow.fee_amount),
-        "provider_id": escrow.provider_id,
-    }
+    fire_webhook_event(session, escrow, "escrow.released")
+
+    return ReleaseResponse(
+        escrow_id=req.escrow_id,
+        status="released",
+        amount_paid=int(escrow.amount),
+        fee_collected=int(escrow.fee_amount),
+        provider_id=escrow.provider_id,
+    )
 
 
-class RefundRequest(BaseModel):
-    escrow_id: str
-    reason: str | None = None
-
-
-@router.post("/exchange/refund")
+@router.post("/exchange/refund", response_model=RefundResponse, tags=["Settlement"])
 def refund(
     req: RefundRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> RefundResponse:
     with session.begin():
         _expire_stale_escrows(session)
 
@@ -271,25 +273,22 @@ def refund(
             provider.reputation = max(0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1)
             session.add(provider)
 
-    return {
-        "escrow_id": req.escrow_id,
-        "status": "refunded",
-        "amount_returned": total_held,
-        "requester_id": escrow.requester_id,
-    }
+    fire_webhook_event(session, escrow, "escrow.refunded")
+
+    return RefundResponse(
+        escrow_id=req.escrow_id,
+        status="refunded",
+        amount_returned=total_held,
+        requester_id=escrow.requester_id,
+    )
 
 
-class DisputeRequest(BaseModel):
-    escrow_id: str
-    reason: str
-
-
-@router.post("/exchange/dispute")
+@router.post("/exchange/dispute", response_model=DisputeResponse, tags=["Settlement"])
 def dispute(
     req: DisputeRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> DisputeResponse:
     with session.begin():
         escrow = session.execute(_lock(select(Escrow).where(Escrow.id == req.escrow_id))).scalar_one_or_none()
         if escrow is None:
@@ -303,24 +302,21 @@ def dispute(
         escrow.dispute_reason = req.reason
         session.add(escrow)
 
-    return {
-        "escrow_id": req.escrow_id,
-        "status": "disputed",
-        "reason": req.reason,
-    }
+    fire_webhook_event(session, escrow, "escrow.disputed")
+
+    return DisputeResponse(
+        escrow_id=req.escrow_id,
+        status="disputed",
+        reason=req.reason,
+    )
 
 
-class ResolveRequest(BaseModel):
-    escrow_id: str
-    resolution: str
-
-
-@router.post("/exchange/resolve")
+@router.post("/exchange/resolve", tags=["Settlement"])
 def resolve(
     req: ResolveRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> ResolveReleaseResponse | ResolveRefundResponse:
     if req.resolution not in ("release", "refund"):
         raise HTTPException(status_code=400, detail="resolution must be 'release' or 'refund'")
 
@@ -381,14 +377,6 @@ def resolve(
                 provider.reputation = min(1.0, float(provider.reputation) * 0.9 + 1.0 * 0.1)
                 session.add(provider)
 
-            return {
-                "escrow_id": req.escrow_id,
-                "resolution": "release",
-                "status": "released",
-                "amount_paid": int(escrow.amount),
-                "fee_collected": int(escrow.fee_amount),
-                "provider_id": escrow.provider_id,
-            }
         else:
             requester_bal = session.execute(_lock(select(Balance).where(Balance.account_id == escrow.requester_id))).scalar_one_or_none()
             if requester_bal is None:
@@ -418,20 +406,27 @@ def resolve(
                 provider.reputation = max(0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1)
                 session.add(provider)
 
-            return {
-                "escrow_id": req.escrow_id,
-                "resolution": "refund",
-                "status": "refunded",
-                "amount_returned": total_held,
-                "requester_id": escrow.requester_id,
-            }
+    fire_webhook_event(session, escrow, "escrow.resolved")
+
+    if req.resolution == "release":
+        return ResolveReleaseResponse(
+            escrow_id=req.escrow_id,
+            amount_paid=int(escrow.amount),
+            fee_collected=int(escrow.fee_amount),
+            provider_id=escrow.provider_id,
+        )
+    return ResolveRefundResponse(
+        escrow_id=req.escrow_id,
+        amount_returned=total_held,
+        requester_id=escrow.requester_id,
+    )
 
 
-@router.get("/exchange/balance")
+@router.get("/exchange/balance", response_model=BalanceResponse, tags=["Settlement"])
 def balance(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> BalanceResponse:
     with session.begin():
         row = session.execute(
             select(Balance, Account)
@@ -441,25 +436,25 @@ def balance(
         if row is None:
             raise HTTPException(status_code=404, detail="Account not found")
         bal, acct = row
-        return {
-            "account_id": acct.id,
-            "bot_name": acct.bot_name,
-            "reputation": float(acct.reputation),
-            "account_status": acct.status,
-            "available": int(bal.available),
-            "held_in_escrow": int(bal.held_in_escrow),
-            "total_earned": int(bal.total_earned),
-            "total_spent": int(bal.total_spent),
-        }
+        return BalanceResponse(
+            account_id=acct.id,
+            bot_name=acct.bot_name,
+            reputation=float(acct.reputation),
+            account_status=acct.status,
+            available=int(bal.available),
+            held_in_escrow=int(bal.held_in_escrow),
+            total_earned=int(bal.total_earned),
+            total_spent=int(bal.total_spent),
+        )
 
 
-@router.get("/exchange/transactions")
+@router.get("/exchange/transactions", response_model=TransactionsResponse, tags=["Settlement"])
 def transactions(
     limit: int = 50,
     offset: int = 0,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> TransactionsResponse:
     with session.begin():
         txs = (
             session.execute(
@@ -472,45 +467,44 @@ def transactions(
             .scalars()
             .all()
         )
-    return {
-        "transactions": [
-            {
-                "id": tx.id,
-                "escrow_id": tx.escrow_id,
-                "from_account": tx.from_account,
-                "to_account": tx.to_account,
-                "amount": int(tx.amount),
-                "tx_type": tx.tx_type,
-                "description": tx.description,
-                "created_at": tx.created_at,
-            }
+    return TransactionsResponse(
+        transactions=[
+            TransactionItem(
+                id=tx.id,
+                escrow_id=tx.escrow_id,
+                from_account=tx.from_account,
+                to_account=tx.to_account,
+                amount=int(tx.amount),
+                tx_type=tx.tx_type,
+                description=tx.description,
+                created_at=tx.created_at,
+            )
             for tx in txs
         ]
-    }
+    )
 
 
-@router.get("/exchange/escrows/{escrow_id}")
+@router.get("/exchange/escrows/{escrow_id}", response_model=EscrowDetailResponse, tags=["Settlement"])
 def get_escrow(
     escrow_id: str,
     _current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> dict[str, Any]:
+) -> EscrowDetailResponse:
     with session.begin():
         escrow = session.execute(select(Escrow).where(Escrow.id == escrow_id)).scalar_one_or_none()
         if escrow is None:
             raise HTTPException(status_code=404, detail="Escrow not found")
-        return {
-            "id": escrow.id,
-            "requester_id": escrow.requester_id,
-            "provider_id": escrow.provider_id,
-            "amount": int(escrow.amount),
-            "fee_amount": int(escrow.fee_amount),
-            "status": escrow.status,
-            "dispute_reason": escrow.dispute_reason,
-            "expires_at": escrow.expires_at,
-            "task_id": escrow.task_id,
-            "task_type": escrow.task_type,
-            "created_at": escrow.created_at,
-            "resolved_at": escrow.resolved_at,
-        }
-
+        return EscrowDetailResponse(
+            id=escrow.id,
+            requester_id=escrow.requester_id,
+            provider_id=escrow.provider_id,
+            amount=int(escrow.amount),
+            fee_amount=int(escrow.fee_amount),
+            status=escrow.status,
+            dispute_reason=escrow.dispute_reason,
+            expires_at=escrow.expires_at,
+            task_id=escrow.task_id,
+            task_type=escrow.task_type,
+            created_at=escrow.created_at,
+            resolved_at=escrow.resolved_at,
+        )

@@ -13,8 +13,15 @@
         "description": "Accepts token-based payment via A2A Settlement Exchange",
         "required": false,
         "params": {
-          "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
-          "accountId": "provider-uuid-on-exchange",
+          "exchangeUrls": [
+            "https://exchange.a2a-settlement.org/api/v1",
+            "https://internal.corp.com/settlement/v1"
+          ],
+          "preferredExchange": "https://exchange.a2a-settlement.org/api/v1",
+          "accountIds": {
+            "https://exchange.a2a-settlement.org/api/v1": "provider-uuid-public",
+            "https://internal.corp.com/settlement/v1": "provider-uuid-internal"
+          },
           "currency": "ATE",
           "pricing": {
             "sentiment-analysis": {
@@ -44,4 +51,3 @@
     }
   ]
 }
-

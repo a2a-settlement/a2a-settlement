@@ -29,7 +29,6 @@ def _get_bool(name: str, default: bool) -> bool:
 
 
 class Settings:
-    # Prefer DATABASE_URL but keep the existing A2A_EXCHANGE_DATABASE_URL for compatibility.
     database_url: str = os.getenv("DATABASE_URL") or os.getenv("A2A_EXCHANGE_DATABASE_URL", "sqlite:///./a2a_exchange.db")
 
     fee_percent: float = _get_float("A2A_EXCHANGE_FEE_PERCENT", 3.0)
@@ -43,6 +42,17 @@ class Settings:
 
     host: str = os.getenv("A2A_EXCHANGE_HOST", "127.0.0.1")
     port: int = _get_int("A2A_EXCHANGE_PORT", 3000)
+
+    # Rate limiting
+    rate_limit_authenticated: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT", "60/minute")
+    rate_limit_public: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT_PUBLIC", "120/minute")
+
+    # Key rotation grace period
+    key_rotation_grace_minutes: int = _get_int("A2A_EXCHANGE_KEY_ROTATION_GRACE_MINUTES", 5)
+
+    # Webhooks
+    webhook_timeout_seconds: int = _get_int("A2A_EXCHANGE_WEBHOOK_TIMEOUT", 10)
+    webhook_max_retries: int = _get_int("A2A_EXCHANGE_WEBHOOK_MAX_RETRIES", 3)
 
 
 settings = Settings()
@@ -66,7 +76,7 @@ SessionLocal = sessionmaker(
     class_=Session,
     expire_on_commit=False,
     autoflush=False,
-    autobegin=False,  # we manage transactions explicitly
+    autobegin=False,
 )
 
 
@@ -76,4 +86,3 @@ def get_session() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
-

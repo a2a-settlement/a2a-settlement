@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import bcrypt
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
@@ -20,7 +22,6 @@ def authenticate_bot(
     authorization: str | None = Header(default=None),
     session: Session = Depends(get_session),
 ) -> dict:
-    # Format: Authorization: Bearer ate_<key>
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401,
@@ -31,8 +32,10 @@ def authenticate_bot(
         raise HTTPException(status_code=401, detail="Invalid API key format")
 
     with session.begin():
-        # Prototype behavior: scan accounts because keys are bcrypt-hashed and opaque.
         accounts = session.execute(select(Account).where(Account.status != "suspended")).scalars().all()
+        now = datetime.now(timezone.utc)
+        grace = timedelta(minutes=settings.key_rotation_grace_minutes)
+
         for acct in accounts:
             if _check_api_key(api_key, acct.api_key_hash):
                 return {
@@ -41,6 +44,18 @@ def authenticate_bot(
                     "developer_id": acct.developer_id,
                     "status": acct.status,
                 }
+            # Check previous key during grace period
+            if (
+                acct.previous_api_key_hash
+                and acct.key_rotated_at
+                and (now - acct.key_rotated_at) < grace
+                and _check_api_key(api_key, acct.previous_api_key_hash)
+            ):
+                return {
+                    "id": acct.id,
+                    "bot_name": acct.bot_name,
+                    "developer_id": acct.developer_id,
+                    "status": acct.status,
+                }
 
     raise HTTPException(status_code=401, detail="Invalid API key")
-

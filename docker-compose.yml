@@ -1,0 +1,34 @@
+services:
+  exchange:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://a2a:a2a@postgres:5432/a2a_exchange
+      A2A_EXCHANGE_HOST: "0.0.0.0"
+      A2A_EXCHANGE_PORT: "3000"
+      A2A_EXCHANGE_AUTO_CREATE_SCHEMA: "true"
+      A2A_EXCHANGE_FEE_PERCENT: "3.0"
+      A2A_EXCHANGE_STARTER_TOKENS: "100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: a2a
+      POSTGRES_PASSWORD: a2a
+      POSTGRES_DB: a2a_exchange
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U a2a"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
