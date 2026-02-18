@@ -15,11 +15,17 @@
         "params": {
           "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
           "accountId": "provider-uuid-on-exchange",
+          "currency": "ATE",
           "pricing": {
             "sentiment-analysis": {
               "baseTokens": 10,
               "model": "per-request",
               "currency": "ATE"
+            },
+            "sentiment-analysis-premium": {
+              "baseTokens": 1,
+              "model": "per-request",
+              "currency": "USDC"
             }
           },
           "reputation": 0.87,

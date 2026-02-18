@@ -279,6 +279,154 @@ def refund(
     }
 
 
+class DisputeRequest(BaseModel):
+    escrow_id: str
+    reason: str
+
+
+@router.post("/exchange/dispute")
+def dispute(
+    req: DisputeRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    with session.begin():
+        escrow = session.execute(_lock(select(Escrow).where(Escrow.id == req.escrow_id))).scalar_one_or_none()
+        if escrow is None:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        if current["id"] not in (escrow.requester_id, escrow.provider_id):
+            raise HTTPException(status_code=403, detail="Only the requester or provider can dispute an escrow")
+        if escrow.status != "held":
+            raise HTTPException(status_code=400, detail=f"Escrow cannot be disputed (status: {escrow.status})")
+
+        escrow.status = "disputed"
+        escrow.dispute_reason = req.reason
+        session.add(escrow)
+
+    return {
+        "escrow_id": req.escrow_id,
+        "status": "disputed",
+        "reason": req.reason,
+    }
+
+
+class ResolveRequest(BaseModel):
+    escrow_id: str
+    resolution: str
+
+
+@router.post("/exchange/resolve")
+def resolve(
+    req: ResolveRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    if req.resolution not in ("release", "refund"):
+        raise HTTPException(status_code=400, detail="resolution must be 'release' or 'refund'")
+
+    if current.get("status") != "operator":
+        raise HTTPException(status_code=403, detail="Only the exchange operator can resolve disputes")
+
+    with session.begin():
+        escrow = session.execute(_lock(select(Escrow).where(Escrow.id == req.escrow_id))).scalar_one_or_none()
+        if escrow is None:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        if escrow.status != "disputed":
+            raise HTTPException(status_code=400, detail=f"Escrow is not disputed (status: {escrow.status})")
+
+        total_held = int(escrow.amount + escrow.fee_amount)
+
+        if req.resolution == "release":
+            requester_bal = session.execute(_lock(select(Balance).where(Balance.account_id == escrow.requester_id))).scalar_one_or_none()
+            provider_bal = session.execute(_lock(select(Balance).where(Balance.account_id == escrow.provider_id))).scalar_one_or_none()
+            if requester_bal is None or provider_bal is None:
+                raise HTTPException(status_code=404, detail="Balance not found")
+
+            requester_bal.held_in_escrow -= total_held
+            requester_bal.total_spent += total_held
+            session.add(requester_bal)
+
+            provider_bal.available += int(escrow.amount)
+            provider_bal.total_earned += int(escrow.amount)
+            session.add(provider_bal)
+
+            escrow.status = "released"
+            escrow.resolved_at = _now()
+            session.add(escrow)
+
+            session.add(
+                Transaction(
+                    escrow_id=escrow.id,
+                    from_account=escrow.requester_id,
+                    to_account=escrow.provider_id,
+                    amount=int(escrow.amount),
+                    tx_type="escrow_release",
+                    description="Dispute resolved - payment released",
+                )
+            )
+            if escrow.fee_amount > 0:
+                session.add(
+                    Transaction(
+                        escrow_id=escrow.id,
+                        from_account=escrow.requester_id,
+                        to_account=None,
+                        amount=int(escrow.fee_amount),
+                        tx_type="fee",
+                        description="Platform transaction fee (dispute resolved)",
+                    )
+                )
+
+            provider = session.execute(select(Account).where(Account.id == escrow.provider_id)).scalar_one_or_none()
+            if provider is not None:
+                provider.reputation = min(1.0, float(provider.reputation) * 0.9 + 1.0 * 0.1)
+                session.add(provider)
+
+            return {
+                "escrow_id": req.escrow_id,
+                "resolution": "release",
+                "status": "released",
+                "amount_paid": int(escrow.amount),
+                "fee_collected": int(escrow.fee_amount),
+                "provider_id": escrow.provider_id,
+            }
+        else:
+            requester_bal = session.execute(_lock(select(Balance).where(Balance.account_id == escrow.requester_id))).scalar_one_or_none()
+            if requester_bal is None:
+                raise HTTPException(status_code=404, detail="Requester balance not found")
+
+            requester_bal.available += total_held
+            requester_bal.held_in_escrow -= total_held
+            session.add(requester_bal)
+
+            escrow.status = "refunded"
+            escrow.resolved_at = _now()
+            session.add(escrow)
+
+            session.add(
+                Transaction(
+                    escrow_id=escrow.id,
+                    from_account=None,
+                    to_account=escrow.requester_id,
+                    amount=total_held,
+                    tx_type="escrow_refund",
+                    description="Dispute resolved - tokens refunded",
+                )
+            )
+
+            provider = session.execute(select(Account).where(Account.id == escrow.provider_id)).scalar_one_or_none()
+            if provider is not None:
+                provider.reputation = max(0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1)
+                session.add(provider)
+
+            return {
+                "escrow_id": req.escrow_id,
+                "resolution": "refund",
+                "status": "refunded",
+                "amount_returned": total_held,
+                "requester_id": escrow.requester_id,
+            }
+
+
 @router.get("/exchange/balance")
 def balance(
     current: dict = Depends(authenticate_bot),
@@ -358,6 +506,7 @@ def get_escrow(
             "amount": int(escrow.amount),
             "fee_amount": int(escrow.fee_amount),
             "status": escrow.status,
+            "dispute_reason": escrow.dispute_reason,
             "expires_at": escrow.expires_at,
             "task_id": escrow.task_id,
             "task_type": escrow.task_type,

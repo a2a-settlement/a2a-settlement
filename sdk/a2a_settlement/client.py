@@ -103,6 +103,20 @@ class SettlementExchangeClient:
             r.raise_for_status()
             return r.json()
 
+    def dispute_escrow(self, *, escrow_id: str, reason: str) -> dict[str, Any]:
+        url = _join(self.base_url, "/v1/exchange/dispute")
+        with self._client() as c:
+            r = c.post(url, json={"escrow_id": escrow_id, "reason": reason})
+            r.raise_for_status()
+            return r.json()
+
+    def resolve_escrow(self, *, escrow_id: str, resolution: str) -> dict[str, Any]:
+        url = _join(self.base_url, "/v1/exchange/resolve")
+        with self._client() as c:
+            r = c.post(url, json={"escrow_id": escrow_id, "resolution": resolution})
+            r.raise_for_status()
+            return r.json()
+
     def get_balance(self) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/balance")
         with self._client() as c:

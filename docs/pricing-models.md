@@ -14,6 +14,10 @@ A2A-SE pricing is declared per skill under the settlement extension params:
 }
 ```
 
+## Currency
+
+The `currency` field specifies the settlement denomination for a skill's pricing. `ATE` is the default on the reference exchange, but exchanges MAY support any currency: `USDC`, `USD`, `credits`, or a custom token. The field appears both at the extension-params level (default for the agent) and per-skill (override for a specific skill). If a per-skill `currency` is omitted, the agent-level default applies.
+
 ## per-request
 - Fixed price per task invocation.
 

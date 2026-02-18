@@ -1,6 +1,6 @@
 # A2A Settlement Extension (A2A-SE)
 
-Draft Specification v0.1.0
+Draft Specification v0.2.0
 
 Extension URI: `https://a2a-settlement.org/extensions/settlement/v1`
 
@@ -17,7 +17,7 @@ The A2A Settlement Extension (A2A-SE) fills this gap by adding escrow-based toke
 - Non-invasive. Uses A2A's existing Extension, metadata, and AgentCard mechanisms. No core protocol changes required.
 - Optional. Agents that don't support settlement ignore it. Agents that do can transact seamlessly.
 - Lifecycle-aligned. Settlement states map directly to A2A TaskState transitions. Escrow holds on task creation, releases on completion, refunds on failure or cancellation.
-- Centralized settlement, decentralized agents. Agents communicate peer-to-peer via A2A. Settlement clears through a hosted exchange service that both agents trust.
+- Exchange as interface, not service. The settlement exchange is an API contract, not a single hosted service. Any conforming implementation -- hosted SaaS, self-hosted behind a firewall, or a smart contract fronted by the same REST surface -- can serve as the exchange. Each agent declares its `exchangeUrl` in its AgentCard, and agents in the same task need not use the same exchange. Agents communicate peer-to-peer via A2A; settlement clears through whatever exchange implementation each party trusts.
 
 ### 1.2. How It Fits Into A2A
 
@@ -107,6 +107,10 @@ Pricing is declared per skill using A2A's existing `AgentSkill` structure. Prici
   }
 }
 ```
+
+### 2.2.1. Currency Field
+
+The `currency` field in the pricing schema is a first-class design element. `ATE` is the default bootstrap currency used by the reference exchange, but the field exists precisely so that alternative exchanges can settle in any unit: `USDC`, `USD`, `credits`, or a custom token. Each exchange operator decides which currencies it supports. Agents SHOULD set `currency` to match the denomination their exchange expects.
 
 ### 2.3. Pricing Models
 
@@ -213,7 +217,17 @@ Provider's task response (acknowledging settlement):
 
 ## 4. Settlement Exchange API
 
-The Settlement Exchange is a hosted service that both agents trust. It exposes a REST API that agents call during the A2A task lifecycle.
+The Settlement Exchange is defined as an **interface specification**, not a single service. Any implementation that conforms to the REST API below is a valid exchange. Agents declare which exchange they use via the `exchangeUrl` field in their AgentCard extension params.
+
+### 4.0. Deployment Models
+
+| Model | Description |
+|-------|-------------|
+| Hosted exchange | A public SaaS instance (e.g., `exchange.a2a-settlement.org`). Agents register, receive API keys, and settle through the operator's infrastructure. This is the default for bootstrapping. |
+| Self-hosted | An organization deploys a private exchange instance behind its firewall. Internal agents settle without exposing traffic to third parties. Uses the same API surface and reference implementation. |
+| On-chain wrapper | A blockchain escrow contract (e.g., Solana program) fronted by a REST adapter that conforms to this API. Settlement finality is on-chain; the REST layer translates calls to contract instructions. |
+
+Two agents in the same task MAY use different exchanges. Cross-exchange settlement (bridging balances between independent exchanges) is out of scope for v0.2 but is enabled by the per-agent `exchangeUrl` design.
 
 ### 4.1. Endpoints
 
@@ -224,6 +238,8 @@ The Settlement Exchange is a hosted service that both agents trust. It exposes a
 | `POST` | `/exchange/escrow` | API Key | Lock tokens for a pending A2A task |
 | `POST` | `/exchange/release` | API Key | Task completed -- pay the provider |
 | `POST` | `/exchange/refund` | API Key | Task failed -- return tokens to requester |
+| `POST` | `/exchange/dispute` | API Key | Flag an escrow as disputed, freezing funds |
+| `POST` | `/exchange/resolve` | Operator | Resolve a disputed escrow (release or refund) |
 | `GET` | `/exchange/balance` | API Key | Check token balance and transaction history |
 | `GET` | `/stats` | Public | Network health: supply, velocity, active escrows |
 
@@ -278,6 +294,46 @@ Authorization: Bearer ate_<api_key>
 }
 ```
 
+### 4.5. Dispute Request
+
+Either party (requester or provider) may flag an active escrow as disputed. This freezes the escrow -- neither release nor refund can proceed until an operator resolves it.
+
+```json
+POST /exchange/dispute
+Authorization: Bearer ate_<api_key>
+
+{
+  "escrow_id": "escrow-uuid",
+  "reason": "Provider delivered incomplete results"
+}
+```
+
+Response:
+
+```json
+{
+  "escrow_id": "escrow-uuid",
+  "status": "disputed",
+  "reason": "Provider delivered incomplete results"
+}
+```
+
+### 4.6. Resolve Request (Operator Only)
+
+The exchange operator resolves a disputed escrow by directing it to either release (pay the provider) or refund (return tokens to the requester). This endpoint requires operator-level authentication.
+
+```json
+POST /exchange/resolve
+Authorization: Bearer ate_<operator_key>
+
+{
+  "escrow_id": "escrow-uuid",
+  "resolution": "release"
+}
+```
+
+`resolution` MUST be one of `"release"` or `"refund"`.
+
 ---
 
 ## 5. Client Agent Workflow
@@ -312,12 +368,15 @@ Exchange updates the provider's reputation score based on outcome. Updated reput
 
 ---
 
-## 6. Token Economics
+## 6. Token Economics (Reference Exchange)
+
+The defaults below apply to the reference exchange at `exchange.a2a-settlement.org`. Alternative exchange implementations MAY define their own currency, fee schedule, starter allocation, and escrow limits.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| Currency | ATE | Default settlement unit. Exchanges MAY support additional currencies via the `currency` pricing field. |
 | Starter allocation | 100 tokens | Free tokens on agent registration |
-| Transaction fee | 3% | Deducted from escrow on release, returned to treasury |
+| Transaction fee | 3% | Deducted from escrow on release, credited to exchange operator treasury |
 | Escrow TTL | 30 minutes | Auto-refund if not resolved |
 | Min escrow | 1 token | Minimum per transaction |
 | Max escrow | 10,000 tokens | Maximum per transaction |
@@ -346,13 +405,28 @@ Developer purchases tokens ($) --> Agent account (available balance)
               3% fee --> Exchange treasury
 ```
 
-### 6.2. Revenue Model
+### 6.2. Exchange Operator Revenue Model
 
-The exchange operator generates revenue from:
-1. Token sales -- developers purchase tokens with fiat currency
-2. Transaction fees -- 3% of each released escrow returns to treasury for resale
+Any exchange operator can generate revenue from the following mechanisms. These apply to whichever exchange implementation is deployed -- hosted, self-hosted, or on-chain.
+
+1. Token sales -- developers purchase tokens (ATE or operator-chosen currency) with fiat currency
+2. Transaction fees -- a percentage of each released escrow is credited to the operator's treasury
 3. Premium tiers -- priority matching, analytics dashboards, bulk escrow
 4. Market data -- anonymized demand signals, pricing trends, skill gap analysis
+
+### 6.3. Dispute Resolution
+
+When either party flags a transaction as `disputed`, the exchange freezes the escrow: no release or refund can proceed until the dispute is resolved.
+
+**v0.2 resolution model (manual):**
+
+1. Either the requester or provider calls `POST /exchange/dispute` with the `escrow_id` and a `reason`.
+2. The escrow status transitions to `disputed`. All release and refund calls are rejected while in this state.
+3. The exchange operator reviews the dispute out-of-band (support channel, logs, task artifacts).
+4. The operator calls `POST /exchange/resolve` with the `escrow_id` and a `resolution` of `"release"` or `"refund"`.
+5. The escrow settles according to the resolution. Reputation is updated as if the task completed or failed normally.
+
+**Future versions** will support pluggable resolution strategies, including third-party arbitrators and AI mediator panels. The `POST /exchange/resolve` endpoint will accept an optional `strategy` field to select a resolution mechanism.
 
 ---
 
@@ -445,3 +519,31 @@ This extension is designed to be contributed to the A2A ecosystem. It does not m
 - `Message.extensions` URI list
 
 The settlement exchange operates as a separate service. A2A agents interact with it using standard HTTPS REST calls, independent of which A2A protocol binding (JSON-RPC, gRPC, HTTP+JSON) they use for agent-to-agent communication.
+
+### 10.1. Relationship to x402 Payment Protocol
+
+x402 and A2A-SE occupy complementary layers of the agent payment stack:
+
+- **x402** is an instant access-payment protocol (pay-per-call). It answers the question: "Can I talk to this agent?" An x402 gate returns HTTP 402 until the caller submits a micropayment, then grants access. Think of it as a toll booth.
+- **A2A-SE** is a task-settlement protocol (escrow for work-in-progress). It answers the question: "How do we hold and release funds while the agent does multi-step work?" Think of it as a contractor payment.
+
+These protocols are complementary, not competing. Agents MAY use both simultaneously.
+
+**Hybrid flow:**
+
+```
+Client                  Provider                    Exchange
+  |                        |                           |
+  |---x402 payment-------->|  (access gate: pay to     |
+  |<--200 + AgentCard------|   discover capabilities)  |
+  |                        |                           |
+  |---POST /escrow---------|-------------------------->|  (lock funds for task)
+  |---A2A message/send---->|                           |
+  |       ...working...    |                           |
+  |<--A2A task completed---|                           |
+  |---POST /release--------|-------------------------->|  (settle task payment)
+```
+
+**Example:** An agent charges 0.001 USDC via x402 for discovery and health-check pings. Once the client decides to submit a task, it uses A2A-SE to escrow 50 ATE for a 10-minute research task. The x402 gate and A2A-SE escrow are independent -- one does not require the other, but together they provide both access control and work-in-progress payment guarantees.
+
+A2A-SE does not replace x402. A2A-SE does not define an access gate. x402 does not define escrow, multi-step settlement, or dispute resolution. Each protocol handles its layer.

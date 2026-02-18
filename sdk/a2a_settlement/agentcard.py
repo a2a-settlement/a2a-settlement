@@ -10,6 +10,7 @@ def build_settlement_extension(
     exchange_url: str,
     account_id: str,
     pricing: dict[str, Any] | None = None,
+    currency: str = "ATE",
     reputation: float | None = None,
     availability: float | None = None,
     required: bool = False,
@@ -20,7 +21,7 @@ def build_settlement_extension(
     Returns a plain dict so callers can use it with or without `a2a-sdk` installed.
     """
 
-    params: dict[str, Any] = {"exchangeUrl": exchange_url, "accountId": account_id}
+    params: dict[str, Any] = {"exchangeUrl": exchange_url, "accountId": account_id, "currency": currency}
     if pricing is not None:
         params["pricing"] = pricing
     if reputation is not None:

@@ -2,7 +2,7 @@
 
 Economic settlement for the Agent2Agent (A2A) protocol.
 
-When two agents discover each other through A2A and one performs work for the other, how does payment happen? This extension adds escrow-based token settlement to A2A's existing task lifecycle using A2A's native extension mechanism. Zero modifications to A2A core.
+When two agents discover each other through A2A and one performs work for the other, how does payment happen? This extension adds escrow-based token settlement to A2A's existing task lifecycle using A2A's native extension mechanism. Zero modifications to A2A core. The exchange is an interface, not a service -- agents can point to any conforming implementation (hosted, self-hosted, or on-chain) via the `exchangeUrl` field in their AgentCard.
 
 ```
 RequesterAgent  <---- A2A ---->  ProviderAgent
@@ -34,6 +34,10 @@ You should see an escrow created and released, and balances updated.
 - `examples/`: runnable demos (including A2A SDK integration)
 - `docs/`: deeper integration + architecture notes
 - Node.js prototype (archived): https://github.com/widrss/a2a-settlement-node-prototype
+
+## How A2A-SE relates to x402
+
+x402 is pay-per-call (an access gate). A2A-SE is task settlement (escrow for work-in-progress). They're complementary layers, not alternatives. An agent can use x402 for discovery gating and A2A-SE for multi-step task payment. See Section 10.1 of the spec for the full hybrid flow.
 
 ## Development
 
