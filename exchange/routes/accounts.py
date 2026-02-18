@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from exchange.auth import authenticate_bot
 from exchange.config import get_session, settings
 from exchange.models import Account, Balance, Transaction
+from exchange.ratelimit import check_register_rate_limit
 from exchange.schemas import (
     AccountResponse,
     DirectoryResponse,
@@ -17,6 +18,8 @@ from exchange.schemas import (
     RegisterRequest,
     RegisterResponse,
     RotateKeyResponse,
+    SuspendRequest,
+    SuspendResponse,
     UpdateSkillsRequest,
     UpdateSkillsResponse,
 )
@@ -25,8 +28,17 @@ from exchange.schemas import (
 router = APIRouter()
 
 
-@router.post("/accounts/register", status_code=201, response_model=RegisterResponse, tags=["Accounts"])
+@router.post(
+    "/accounts/register",
+    status_code=201,
+    response_model=RegisterResponse,
+    tags=["Accounts"],
+    dependencies=[Depends(check_register_rate_limit)],
+)
 def register(req: RegisterRequest, session: Session = Depends(get_session)) -> RegisterResponse:
+    if settings.invite_code and req.invite_code != settings.invite_code:
+        raise HTTPException(status_code=403, detail="Invalid or missing invite code")
+
     api_key = f"ate_{secrets.token_hex(16)}"
     api_key_hash = bcrypt.hashpw(
         api_key.encode("utf-8"),
@@ -41,6 +53,8 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
         account = Account(
             bot_name=req.bot_name,
             developer_id=req.developer_id,
+            developer_name=req.developer_name,
+            contact_email=req.contact_email,
             api_key_hash=api_key_hash,
             description=req.description,
             skills=req.skills or [],
@@ -64,6 +78,8 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
             id=account.id,
             bot_name=account.bot_name,
             developer_id=account.developer_id,
+            developer_name=account.developer_name,
+            contact_email=account.contact_email,
             description=account.description,
             skills=account.skills,
             status=account.status,
@@ -100,6 +116,9 @@ def directory(
             AccountResponse(
                 id=b.id,
                 bot_name=b.bot_name,
+                developer_id=b.developer_id,
+                developer_name=b.developer_name,
+                contact_email=b.contact_email,
                 description=b.description,
                 skills=b.skills,
                 status=b.status,
@@ -122,6 +141,8 @@ def get_account(account_id: str, session: Session = Depends(get_session)) -> Acc
             id=acct.id,
             bot_name=acct.bot_name,
             developer_id=acct.developer_id,
+            developer_name=acct.developer_name,
+            contact_email=acct.contact_email,
             description=acct.description,
             skills=acct.skills,
             status=acct.status,
@@ -169,3 +190,24 @@ def rotate_key(
         api_key=new_key,
         grace_period_minutes=settings.key_rotation_grace_minutes,
     )
+
+
+@router.post("/accounts/admin/suspend", response_model=SuspendResponse, tags=["Accounts"])
+def suspend_account(
+    req: SuspendRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> SuspendResponse:
+    if current.get("status") != "operator":
+        raise HTTPException(status_code=403, detail="Only the exchange operator can suspend accounts")
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == req.account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if acct.status == "operator":
+            raise HTTPException(status_code=400, detail="Cannot suspend an operator account")
+        acct.status = "suspended"
+        session.add(acct)
+
+    return SuspendResponse(account_id=acct.id, reason=req.reason)

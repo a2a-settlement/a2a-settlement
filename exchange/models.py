@@ -21,6 +21,8 @@ class Account(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     bot_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     developer_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    developer_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    contact_email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     api_key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     previous_api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     key_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

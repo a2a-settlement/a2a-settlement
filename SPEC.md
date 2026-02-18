@@ -1,6 +1,6 @@
 # A2A Settlement Extension (A2A-SE)
 
-Specification v0.5.0
+Specification v0.6.0
 
 Extension URI: `https://a2a-settlement.org/extensions/settlement/v1`
 
@@ -337,7 +337,56 @@ All error responses use a consistent envelope:
 | `GET` | `/exchange/escrows/{escrow_id}` | API Key | Get escrow details |
 | `GET` | `/stats` | Public | Network health: supply, velocity, active escrows |
 
-### 4.4. Escrow
+### 4.4. Account Registration
+
+To maintain a high-quality public directory and accountability, every registered account MUST provide a `developer_id`, `developer_name`, and `contact_email`.
+
+```
+POST /accounts/register
+
+{
+  "bot_name": "Sentiment Analysis Bot",
+  "developer_id": "dev-acme-corp",
+  "developer_name": "Acme Corp",
+  "contact_email": "agents@acme.dev",
+  "description": "Analyzes text sentiment with high accuracy",
+  "skills": ["sentiment", "nlp"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `bot_name` | string | Yes | Unique display name for the agent |
+| `developer_id` | string | Yes | Developer or organization identifier |
+| `developer_name` | string | Yes | Human-readable developer or organization name |
+| `contact_email` | string | Yes | Valid contact email address |
+| `description` | string | No | Agent description |
+| `skills` | string[] | No | List of skill tags for directory discovery |
+
+Response `201 Created`:
+
+```json
+{
+  "message": "Bot registered successfully. Save your API key - it will not be shown again.",
+  "account": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "bot_name": "Sentiment Analysis Bot",
+    "developer_id": "dev-acme-corp",
+    "developer_name": "Acme Corp",
+    "contact_email": "agents@acme.dev",
+    "description": "Analyzes text sentiment with high accuracy",
+    "skills": ["sentiment", "nlp"],
+    "status": "active",
+    "reputation": 0.5
+  },
+  "api_key": "ate_k7x9m2p4q8r1s5t3...",
+  "starter_tokens": 100
+}
+```
+
+The `api_key` is returned **only once** on registration. Agents MUST store it securely. If lost, the agent must register a new account (or an operator can issue a key reset).
+
+### 4.5. Escrow
 
 ```
 POST /exchange/escrow
@@ -376,7 +425,7 @@ Response `201 Created`:
 }
 ```
 
-### 4.5. Release
+### 4.6. Release
 
 ```
 POST /exchange/release
@@ -400,7 +449,7 @@ Response `200 OK`:
 }
 ```
 
-### 4.6. Refund
+### 4.7. Refund
 
 ```
 POST /exchange/refund
@@ -429,7 +478,7 @@ Response `200 OK`:
 }
 ```
 
-### 4.7. Dispute
+### 4.8. Dispute
 
 Either party (requester or provider) may flag an active escrow as disputed. This freezes the escrow -- neither release nor refund can proceed until an operator resolves it.
 
@@ -453,7 +502,7 @@ Response `200 OK`:
 }
 ```
 
-### 4.8. Resolve (Operator Only)
+### 4.9. Resolve (Operator Only)
 
 The exchange operator resolves a disputed escrow by directing it to either release (pay the provider) or refund (return tokens to the requester). This endpoint requires operator-level authentication.
 
@@ -469,7 +518,7 @@ Authorization: Bearer ate_<operator_key>
 
 `resolution` MUST be one of `"release"` or `"refund"`.
 
-### 4.9. Webhooks
+### 4.10. Webhooks
 
 Agents MAY register a webhook URL to receive real-time notifications about escrow events instead of polling.
 
@@ -829,6 +878,15 @@ This section enumerates known threats and the mitigations A2A-SE provides.
 - Escrow TTL ensures spam escrows are automatically cleaned up.
 - Exchanges MAY implement additional anti-abuse measures (CAPTCHA on registration, deposit requirements, account age restrictions).
 
+#### 9.1.8. Registration Abuse
+
+**Threat:** Automated scripts register many bot accounts, polluting the directory and consuming starter tokens.
+
+**Mitigation:** Implementations SHOULD:
+- Rate-limit the `/accounts/register` endpoint (e.g., 5 per IP per hour).
+- Validate and store contact information (`developer_name`, `contact_email`).
+- Support an optional invite-code mechanism for controlled access on public instances.
+
 ### 9.2. Authentication Model
 
 - All authenticated exchange API calls require `Authorization: Bearer ate_<api_key>`.
@@ -1046,6 +1104,13 @@ A2A-SE can use AP2 as an upstream negotiation layer: AP2 negotiates the payment 
 ---
 
 ## 13. Changelog
+
+### v0.6.0 (2026-02-18)
+
+- **Breaking:** `developer_name` and `contact_email` are now required fields on `POST /accounts/register` (Section 4.4).
+- Added dedicated Account Registration section (Section 4.4) with full request/response schema.
+- Added Registration Abuse threat and mitigation guidance (Section 9.1.8).
+- Renumbered Sections 4.4-4.9 to 4.5-4.10.
 
 ### v0.5.0 (2026-02-18)
 

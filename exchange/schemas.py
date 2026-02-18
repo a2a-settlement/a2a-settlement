@@ -25,14 +25,19 @@ class ErrorResponse(BaseModel):
 class RegisterRequest(BaseModel):
     bot_name: str = Field(..., min_length=1)
     developer_id: str = Field(..., min_length=1)
+    developer_name: str = Field(..., min_length=1)
+    contact_email: str = Field(..., pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     description: str | None = None
     skills: list[str] | None = None
+    invite_code: str | None = None
 
 
 class RegisterAccountInfo(BaseModel):
     id: str
     bot_name: str
     developer_id: str
+    developer_name: str
+    contact_email: str
     description: str | None = None
     skills: list[str] = []
     status: str = "active"
@@ -50,7 +55,9 @@ class RegisterResponse(BaseModel):
 class AccountResponse(BaseModel):
     id: str
     bot_name: str
-    developer_id: str | None = None
+    developer_id: str
+    developer_name: str
+    contact_email: str
     description: str | None = None
     skills: list[str] = []
     status: str
@@ -61,6 +68,17 @@ class AccountResponse(BaseModel):
 class DirectoryResponse(BaseModel):
     bots: list[AccountResponse]
     count: int
+
+
+class SuspendRequest(BaseModel):
+    account_id: str = Field(..., min_length=1)
+    reason: str | None = None
+
+
+class SuspendResponse(BaseModel):
+    account_id: str
+    status: str = "suspended"
+    reason: str | None = None
 
 
 class UpdateSkillsRequest(BaseModel):
@@ -260,4 +278,4 @@ class StatsResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "a2a-settlement-exchange"
-    version: str = "0.5.0"
+    version: str = "0.6.0"

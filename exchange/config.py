@@ -46,6 +46,11 @@ class Settings:
     # Rate limiting
     rate_limit_authenticated: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT", "60/minute")
     rate_limit_public: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT_PUBLIC", "120/minute")
+    register_rate_limit_per_hour: int = _get_int("A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR", 5)
+    register_rate_limit_per_day: int = _get_int("A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY", 20)
+
+    # Invite code (empty = open registration)
+    invite_code: str = os.getenv("A2A_EXCHANGE_INVITE_CODE", "")
 
     # Key rotation grace period
     key_rotation_grace_minutes: int = _get_int("A2A_EXCHANGE_KEY_ROTATION_GRACE_MINUTES", 5)

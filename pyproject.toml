@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a2a-settlement-dev"
-version = "0.5.0"
+version = "0.6.0"
 description = "Dev workspace for a2a-settlement repo"
 readme = "README.md"
 requires-python = ">=3.10"

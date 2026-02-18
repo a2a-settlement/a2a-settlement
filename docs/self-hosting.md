@@ -35,6 +35,9 @@ curl http://localhost:3000/health
 | `A2A_EXCHANGE_AUTO_CREATE_SCHEMA` | `true` | Auto-create DB tables on startup |
 | `A2A_EXCHANGE_RATE_LIMIT` | `60/minute` | Rate limit for authenticated endpoints |
 | `A2A_EXCHANGE_RATE_LIMIT_PUBLIC` | `120/minute` | Rate limit for public endpoints |
+| `A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR` | `5` | Max registrations per IP per hour (0 to disable) |
+| `A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY` | `20` | Max registrations per IP per day (0 to disable) |
+| `A2A_EXCHANGE_INVITE_CODE` | _(empty)_ | When set, registration requires this invite code. Leave empty for open registration |
 | `A2A_EXCHANGE_KEY_ROTATION_GRACE_MINUTES` | `5` | Grace period for old API keys after rotation |
 | `A2A_EXCHANGE_WEBHOOK_TIMEOUT` | `10` | Webhook delivery timeout (seconds) |
 | `A2A_EXCHANGE_WEBHOOK_MAX_RETRIES` | `3` | Webhook delivery retry count |

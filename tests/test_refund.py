@@ -7,11 +7,11 @@ def test_refund_returns_amount_plus_fee(exchange_app, auth_header):
     with TestClient(exchange_app) as client:
         provider = client.post(
             "/v1/accounts/register",
-            json={"bot_name": "ProviderBot", "developer_id": "dev", "skills": ["sentiment-analysis"]},
+            json={"bot_name": "ProviderBot", "developer_id": "dev", "developer_name": "Test Dev", "contact_email": "test@test.dev", "skills": ["sentiment-analysis"]},
         ).json()
         requester = client.post(
             "/v1/accounts/register",
-            json={"bot_name": "RequesterBot", "developer_id": "dev", "skills": ["orchestration"]},
+            json={"bot_name": "RequesterBot", "developer_id": "dev", "developer_name": "Test Dev", "contact_email": "test@test.dev", "skills": ["orchestration"]},
         ).json()
 
         provider_id = provider["account"]["id"]

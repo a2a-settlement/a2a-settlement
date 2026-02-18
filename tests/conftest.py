@@ -18,11 +18,20 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("A2A_EXCHANGE_AUTO_CREATE_SCHEMA", "true")
     monkeypatch.setenv("A2A_EXCHANGE_STARTER_TOKENS", "100")
     monkeypatch.setenv("A2A_EXCHANGE_FEE_PERCENT", "3")
+    monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR", "0")
+    monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY", "0")
+    monkeypatch.setenv("A2A_EXCHANGE_INVITE_CODE", "")
 
     import exchange.config as config_mod
+    import exchange.ratelimit as ratelimit_mod
+    import exchange.routes.accounts as accounts_mod
+    import exchange.routes.settlement as settlement_mod
     import exchange.app as app_mod
 
     importlib.reload(config_mod)
+    importlib.reload(ratelimit_mod)
+    importlib.reload(accounts_mod)
+    importlib.reload(settlement_mod)
     importlib.reload(app_mod)
 
     return app_mod.create_app()
