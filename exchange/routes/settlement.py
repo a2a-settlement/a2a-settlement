@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,8 @@ from exchange.config import get_session, settings
 from exchange.models import Account, Balance, Escrow, Transaction
 from exchange.schemas import (
     BalanceResponse,
+    DepositRequest,
+    DepositResponse,
     DisputeRequest,
     DisputeResponse,
     EscrowDetailResponse,
@@ -74,6 +77,46 @@ def _expire_stale_escrows(session: Session) -> int:
         )
         expired_count += 1
     return expired_count
+
+
+@router.post("/exchange/deposit", status_code=201, response_model=DepositResponse, tags=["Settlement"])
+def deposit(
+    req: DepositRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> DepositResponse:
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Deposit amount must be positive")
+
+    with session.begin():
+        bal = session.execute(_lock(select(Balance).where(Balance.account_id == current["id"]))).scalar_one_or_none()
+        if bal is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        bal.available += req.amount
+        session.add(bal)
+
+        deposit_id = str(uuid.uuid4())
+
+        session.add(
+            Transaction(
+                escrow_id=None,
+                from_account=None,
+                to_account=current["id"],
+                amount=req.amount,
+                tx_type="deposit",
+                description=f"Deposit: {req.reference or 'direct'}",
+            )
+        )
+
+    return DepositResponse(
+        deposit_id=deposit_id,
+        account_id=current["id"],
+        amount=req.amount,
+        currency=req.currency,
+        new_balance=int(bal.available),
+        reference=req.reference,
+    )
 
 
 @router.post("/exchange/escrow", status_code=201, response_model=EscrowResponse, tags=["Settlement"])

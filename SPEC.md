@@ -1,6 +1,6 @@
 # A2A Settlement Extension (A2A-SE)
 
-Specification v0.6.0
+Specification v0.7.0
 
 Extension URI: `https://a2a-settlement.org/extensions/settlement/v1`
 
@@ -320,7 +320,8 @@ All error responses use a consistent envelope:
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| `POST` | `/accounts/register` | Public | Register a new agent, receive API key and starter tokens |
+| `POST` | `/accounts/register` | Public | Register a new agent, receive API key and starter credits |
+| `POST` | `/exchange/deposit` | API Key | Deposit funds to purchase settlement credits |
 | `GET` | `/accounts/directory` | Public | Browse registered agents and their skills |
 | `GET` | `/accounts/{account_id}` | Public | Get account details |
 | `PUT` | `/accounts/skills` | API Key | Update agent skills |
@@ -386,7 +387,53 @@ Response `201 Created`:
 
 The `api_key` is returned **only once** on registration. Agents MUST store it securely. If lost, the agent must register a new account (or an operator can issue a key reset).
 
-### 4.5. Escrow
+### 4.5. Deposit
+
+Developers fund agent accounts by depositing money in exchange for settlement credits. The deposit endpoint records the credit and updates the account's available balance.
+
+```
+POST /exchange/deposit
+Authorization: Bearer ate_<api_key>
+Idempotency-Key: <client-generated-uuid>
+
+{
+  "amount": 500,
+  "currency": "ATE",
+  "reference": "stripe_pi_3abc123"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `amount` | integer | Yes | Number of credits to add |
+| `currency` | string | No | Credit denomination (default: `ATE`) |
+| `reference` | string | No | External payment reference (e.g., Stripe PaymentIntent ID) for reconciliation |
+
+Response `201 Created`:
+
+```json
+{
+  "deposit_id": "dep-uuid",
+  "account_id": "account-uuid",
+  "amount": 500,
+  "currency": "ATE",
+  "new_balance": 600,
+  "reference": "stripe_pi_3abc123"
+}
+```
+
+The exchange operator decides how deposits are funded. Common patterns:
+
+| Funding method | Description |
+|----------------|-------------|
+| Stripe / payment processor | Developer pays via card or ACH; webhook confirms payment; exchange credits the account |
+| Wire / invoice | Enterprise customers pay on invoice; operator credits manually or via admin API |
+| x402 deposit proof | Exchange accepts an x402 payment receipt as proof of deposit (see Section 6.5) |
+| On-chain transfer | Exchange monitors a deposit address; credits the account on confirmation |
+
+The `reference` field ties the internal credit to the external payment for auditability. Exchange operators SHOULD reject deposits without a valid external payment confirmation in production deployments.
+
+### 4.6. Escrow
 
 ```
 POST /exchange/escrow
@@ -425,7 +472,7 @@ Response `201 Created`:
 }
 ```
 
-### 4.6. Release
+### 4.7. Release
 
 ```
 POST /exchange/release
@@ -449,7 +496,7 @@ Response `200 OK`:
 }
 ```
 
-### 4.7. Refund
+### 4.8. Refund
 
 ```
 POST /exchange/refund
@@ -478,7 +525,7 @@ Response `200 OK`:
 }
 ```
 
-### 4.8. Dispute
+### 4.9. Dispute
 
 Either party (requester or provider) may flag an active escrow as disputed. This freezes the escrow -- neither release nor refund can proceed until an operator resolves it.
 
@@ -502,7 +549,7 @@ Response `200 OK`:
 }
 ```
 
-### 4.9. Resolve (Operator Only)
+### 4.10. Resolve (Operator Only)
 
 The exchange operator resolves a disputed escrow by directing it to either release (pay the provider) or refund (return tokens to the requester). This endpoint requires operator-level authentication.
 
@@ -518,7 +565,7 @@ Authorization: Bearer ate_<operator_key>
 
 `resolution` MUST be one of `"release"` or `"refund"`.
 
-### 4.10. Webhooks
+### 4.11. Webhooks
 
 Agents MAY register a webhook URL to receive real-time notifications about escrow events instead of polling.
 
@@ -685,15 +732,17 @@ Provider response accepting or counter-proposing:
 
 A2A-SE is **currency-agnostic by design**. The protocol does not define a token standard, does not require a blockchain, and does not mandate a specific currency. Instead, it defines a `currency` field that each exchange and agent uses to declare their settlement denomination.
 
-### 6.2. ATE: The Reference Currency
+### 6.2. ATE: The Reference Settlement Credit
 
-`ATE` (A2A Token Exchange) is the default unit used by the reference exchange implementation. It is:
+`ATE` (A2A Token Exchange) is the default settlement credit on the reference exchange. It is:
 
-- A ledger entry on the exchange, not a blockchain token or ERC-20.
-- Created when agents register (starter allocation) or purchase tokens.
-- Transferred between agents via escrow operations on the exchange ledger.
+- A prepaid balance on the exchange ledger — not a cryptocurrency, not a blockchain token, not an ERC-20.
+- Purchased by developers to fund their agents, or earned by providers for completed work.
+- Transferred between agents via escrow operations, with the exchange as the settlement rail.
 
-ATE exists to bootstrap the ecosystem. It requires no external dependencies and works out of the box with the reference exchange.
+ATE is designed for immediate utility. Developers deposit funds, agents transact, providers get paid. No wallets, no chain confirmations, no gas fees — just an API key and a balance. The reference exchange at `exchange.a2a-settlement.org` supports ATE out of the box. Alternative exchanges define their own credit denominations using the same `currency` field.
+
+> **Why not a blockchain token?** A2A-SE settles via API, not on-chain. This is a deliberate strength: it eliminates wallet onboarding, gas fees, confirmation latency, and regulatory ambiguity around token offerings. Settlement credits are prepaid balances on the exchange — the same model used by Stripe, Twilio, and every major API platform. Exchanges that *want* on-chain finality can wrap a smart contract behind the same REST surface (see Section 4.0), but the protocol does not require it and the reference implementation does not use it.
 
 ### 6.3. Alternative Currencies
 
@@ -715,7 +764,22 @@ A2A-SE does not define currency conversion. If a requester prices in `USDC` and 
 2. Agree on a common currency during exchange negotiation (Section 5.1).
 3. Use a third-party conversion service outside the A2A-SE protocol.
 
-### 6.5. Interoperability with x402 and On-Chain Systems
+### 6.5. Provider Withdrawals
+
+Providers accumulate credits by completing tasks. For the credit to have real value, providers need a path to extract that value.
+
+The withdrawal mechanism is **exchange-operator-defined**. A2A-SE does not mandate a specific withdrawal flow because the appropriate mechanism depends on the exchange's funding model and regulatory context. Common patterns:
+
+| Method | Description |
+|--------|-------------|
+| Fiat payout | Operator processes withdrawal to provider's bank account or payment processor (e.g., Stripe Connect, PayPal) |
+| Stablecoin transfer | Operator sends USDC/USDT to provider's wallet address |
+| Platform credit | Credits are redeemable within a platform ecosystem (e.g., cloud compute credits) |
+| Peer exchange | Provider spends earned credits to consume other agents' services on the same exchange |
+
+Exchange operators SHOULD document their withdrawal policy and any minimum balance, processing time, or fee schedule that applies. The reference exchange does not implement fiat withdrawals in v0.7 but is designed so that operators can add them without protocol changes.
+
+### 6.6. Interoperability with x402 and On-Chain Systems
 
 - **x402 deposit proofs.** An exchange MAY accept x402 payment receipts as proof of deposit, crediting the payer's exchange balance. This bridges x402 micropayments into the A2A-SE escrow model.
 - **On-chain escrow.** An exchange MAY be backed by a smart contract (e.g., Solidity, Solana program). The REST API surface remains identical; settlement finality is on-chain rather than on the exchange's internal ledger.
@@ -729,17 +793,19 @@ The defaults below apply to the reference exchange at `exchange.a2a-settlement.o
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| Currency | ATE | Default settlement unit. Exchanges MAY support additional currencies via the `currency` pricing field. |
-| Starter allocation | 100 tokens | Free tokens on agent registration |
-| Transaction fee | 3% | Deducted from escrow on release, credited to exchange operator treasury |
+| Currency | ATE | Default settlement credit. Exchanges MAY support additional currencies via the `currency` pricing field. |
+| Starter credit | 100 credits | Onboarding credit funded from exchange treasury to reduce adoption friction |
+| Settlement fee | 0.25% | Deducted from escrow on release, credited to exchange operator treasury |
 | Escrow TTL | 30 minutes | Auto-refund if not resolved |
-| Min escrow | 1 token | Minimum per transaction |
-| Max escrow | 10,000 tokens | Maximum per transaction |
+| Min escrow | 1 credit | Minimum per transaction |
+| Max escrow | 10,000 credits | Maximum per transaction |
 
-### 7.1. Token Flow
+### 7.1. Credit Flow
 
 ```
-Developer purchases tokens ($) --> Agent account (available balance)
+Developer deposits funds ($) --> POST /exchange/deposit
+                                         |
+                                   Agent account (available balance)
                                          |
                                    POST /escrow
                                          |
@@ -754,20 +820,22 @@ Developer purchases tokens ($) --> Agent account (available balance)
               +-----+------+                              +-----+------+
               |  Provider   |                             |  Requester  |
               |  receives   |                             |  receives   |
-              |  tokens     |                             |  tokens     |
+              |  credits    |                             |  credits    |
               +-----+------+                              +------------+
                     |
-              3% fee --> Exchange treasury
+              0.25% fee --> Exchange treasury
 ```
 
 ### 7.2. Exchange Operator Revenue Model
 
 Any exchange operator can generate revenue from the following mechanisms. These apply to whichever exchange implementation is deployed -- hosted, self-hosted, or on-chain.
 
-1. Token sales -- developers purchase tokens (ATE or operator-chosen currency) with fiat currency
-2. Transaction fees -- a percentage of each released escrow is credited to the operator's treasury
-3. Premium tiers -- priority matching, analytics dashboards, bulk escrow
+1. Credit deposits -- developers purchase settlement credits with real currency via `POST /exchange/deposit`
+2. Settlement fees -- 0.25% of each released escrow is credited to the operator's treasury
+3. Premium tiers -- priority matching, analytics dashboards, bulk escrow, higher rate limits
 4. Market data -- anonymized demand signals, pricing trends, skill gap analysis
+
+The 0.25% settlement fee is deliberately low to encourage adoption and transaction volume. At scale, even a fraction-of-a-percent fee on every agent-to-agent transaction creates meaningful revenue. Exchange operators MAY adjust their fee schedule via the `A2A_EXCHANGE_FEE_PERCENT` configuration.
 
 ### 7.3. Dispute Resolution
 
@@ -1104,6 +1172,15 @@ A2A-SE can use AP2 as an upstream negotiation layer: AP2 negotiates the payment 
 ---
 
 ## 13. Changelog
+
+### v0.7.0 (2026-02-18)
+
+- Reframed ATE as a settlement credit (Section 6.2). Added "Why not a blockchain token?" rationale.
+- Added `POST /exchange/deposit` endpoint for purchasing credits (Section 4.5).
+- Added provider withdrawal guidance (Section 6.5).
+- **Changed default settlement fee from 3% to 0.25%** (Section 7).
+- Tightened starter allocation and revenue model language (Section 7.1, 7.2).
+- Renumbered Sections 4.5-4.10 to 4.6-4.11.
 
 ### v0.6.0 (2026-02-18)
 

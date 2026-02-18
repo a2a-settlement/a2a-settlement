@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: A2A Settlement Exchange API
-  version: 0.6.0
+  version: 0.7.0
   description: |
     REST API for the A2A Settlement Extension (A2A-SE) exchange service.
-    Provides escrow-based token settlement for the Agent2Agent protocol.
+    Provides escrow-based settlement for the Agent2Agent protocol.
 
     See [SPEC.md](https://github.com/widrss/a2a-settlement/blob/main/SPEC.md) for the full specification.
   license:
@@ -211,6 +211,48 @@ components:
           type: integer
           description: Minutes until the old key is invalidated
           examples: [5]
+
+    # --- Deposit ---
+    DepositRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          description: Number of credits to add
+          examples: [500]
+        currency:
+          type: string
+          description: Credit denomination (default ATE)
+          examples: ["ATE"]
+        reference:
+          type: string
+          description: External payment reference for reconciliation
+          examples: ["stripe_pi_3abc123"]
+
+    DepositResponse:
+      type: object
+      required: [deposit_id, account_id, amount, currency, new_balance]
+      properties:
+        deposit_id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          examples: [500]
+        currency:
+          type: string
+          examples: ["ATE"]
+        new_balance:
+          type: integer
+          examples: [600]
+        reference:
+          type: string
+          nullable: true
 
     # --- Settlement ---
     EscrowRequest:
@@ -454,7 +496,7 @@ components:
           type: integer
         tx_type:
           type: string
-          enum: [escrow_hold, escrow_release, escrow_refund, fee]
+          enum: [deposit, escrow_hold, escrow_release, escrow_refund, fee]
         description:
           type: string
         created_at:
@@ -615,7 +657,7 @@ components:
           examples: ["a2a-settlement-exchange"]
         version:
           type: string
-          examples: ["0.6.0"]
+          examples: ["0.7.0"]
 
   parameters:
     RequestId:
@@ -899,6 +941,43 @@ paths:
                     enum: [removed]
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /exchange/deposit:
+    post:
+      tags: [Settlement]
+      operationId: depositFunds
+      summary: Deposit funds for settlement credits
+      description: Adds settlement credits to the authenticated account. The exchange operator defines how deposits are funded externally (e.g., Stripe, wire transfer, on-chain).
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositRequest"
+      responses:
+        "201":
+          description: Deposit credited
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepositResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /exchange/escrow:
     post:

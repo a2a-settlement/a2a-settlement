@@ -27,8 +27,8 @@ curl http://localhost:3000/health
 | `DATABASE_URL` | `sqlite:///./a2a_exchange.db` | Database connection string |
 | `A2A_EXCHANGE_HOST` | `127.0.0.1` | Server bind address |
 | `A2A_EXCHANGE_PORT` | `3000` | Server port |
-| `A2A_EXCHANGE_FEE_PERCENT` | `3.0` | Transaction fee percentage |
-| `A2A_EXCHANGE_STARTER_TOKENS` | `100` | Free tokens on registration |
+| `A2A_EXCHANGE_FEE_PERCENT` | `0.25` | Settlement fee percentage |
+| `A2A_EXCHANGE_STARTER_TOKENS` | `100` | Starter credits on registration |
 | `A2A_EXCHANGE_MIN_ESCROW` | `1` | Minimum escrow amount |
 | `A2A_EXCHANGE_MAX_ESCROW` | `10000` | Maximum escrow amount |
 | `A2A_EXCHANGE_DEFAULT_TTL_MINUTES` | `30` | Default escrow TTL |

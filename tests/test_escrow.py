@@ -28,10 +28,10 @@ def test_escrow_moves_available_to_held(exchange_app, auth_header):
         )
         assert escrow.status_code == 201, escrow.text
         esc = escrow.json()
-        assert esc["fee_amount"] == 2  # ceil(1.5)
-        assert esc["total_held"] == 52
+        assert esc["fee_amount"] == 1  # ceil(50 * 0.0025)
+        assert esc["total_held"] == 51
 
         bal1 = client.get("/v1/exchange/balance", headers=auth_header(requester_key)).json()
-        assert bal1["available"] == 48
-        assert bal1["held_in_escrow"] == 52
+        assert bal1["available"] == 49
+        assert bal1["held_in_escrow"] == 51
 

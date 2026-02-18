@@ -95,6 +95,24 @@ class RotateKeyResponse(BaseModel):
     grace_period_minutes: int
 
 
+# --- Deposit ---
+
+
+class DepositRequest(BaseModel):
+    amount: int = Field(..., gt=0)
+    currency: str = "ATE"
+    reference: str | None = None
+
+
+class DepositResponse(BaseModel):
+    deposit_id: str
+    account_id: str
+    amount: int
+    currency: str
+    new_balance: int
+    reference: str | None = None
+
+
 # --- Settlement ---
 
 
@@ -278,4 +296,4 @@ class StatsResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "a2a-settlement-exchange"
-    version: str = "0.6.0"
+    version: str = "0.7.0"

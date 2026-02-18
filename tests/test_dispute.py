@@ -163,7 +163,7 @@ def test_resolve_to_refund(exchange_app, auth_header, monkeypatch):
         body = resp.json()
         assert body["resolution"] == "refund"
         assert body["status"] == "refunded"
-        assert body["amount_returned"] == 11  # 10 + ceil(0.3) fee
+        assert body["amount_returned"] == 11  # 10 + ceil(10 * 0.0025) fee
 
         bal = client.get("/v1/exchange/balance", headers=auth_header(requester_key)).json()
         assert bal["held_in_escrow"] == 0

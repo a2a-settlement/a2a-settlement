@@ -18,7 +18,7 @@ def _make_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env_overrides):
     monkeypatch.setenv("A2A_EXCHANGE_DATABASE_URL", f"sqlite:///{tmp_path / 'exchange.db'}")
     monkeypatch.setenv("A2A_EXCHANGE_AUTO_CREATE_SCHEMA", "true")
     monkeypatch.setenv("A2A_EXCHANGE_STARTER_TOKENS", "100")
-    monkeypatch.setenv("A2A_EXCHANGE_FEE_PERCENT", "3")
+    monkeypatch.setenv("A2A_EXCHANGE_FEE_PERCENT", "0.25")
     monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR", "0")
     monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY", "0")
     monkeypatch.setenv("A2A_EXCHANGE_INVITE_CODE", "")

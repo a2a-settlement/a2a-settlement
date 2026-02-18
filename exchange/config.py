@@ -31,7 +31,7 @@ def _get_bool(name: str, default: bool) -> bool:
 class Settings:
     database_url: str = os.getenv("DATABASE_URL") or os.getenv("A2A_EXCHANGE_DATABASE_URL", "sqlite:///./a2a_exchange.db")
 
-    fee_percent: float = _get_float("A2A_EXCHANGE_FEE_PERCENT", 3.0)
+    fee_percent: float = _get_float("A2A_EXCHANGE_FEE_PERCENT", 0.25)
     starter_tokens: int = _get_int("A2A_EXCHANGE_STARTER_TOKENS", 100)
     min_escrow: int = _get_int("A2A_EXCHANGE_MIN_ESCROW", 1)
     max_escrow: int = _get_int("A2A_EXCHANGE_MAX_ESCROW", 10_000)

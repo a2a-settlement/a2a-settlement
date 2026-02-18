@@ -33,7 +33,7 @@ def test_release_pays_provider_and_records_fee(exchange_app, auth_header):
         body = rel.json()
         assert body["status"] == "released"
         assert body["amount_paid"] == 10
-        assert body["fee_collected"] == 1  # ceil(0.3)
+        assert body["fee_collected"] == 1  # ceil(10 * 0.0025)
 
         provider_bal = client.get("/v1/exchange/balance", headers=auth_header(provider_key)).json()
         assert provider_bal["available"] == 110
