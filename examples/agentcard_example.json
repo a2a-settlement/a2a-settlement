@@ -13,7 +13,7 @@
         "description": "Accepts token-based payment via A2A Settlement Exchange",
         "required": false,
         "params": {
-          "exchangeUrl": "http://127.0.0.1:3000/v1",
+          "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
           "accountId": "provider-uuid-on-exchange",
           "pricing": {
             "sentiment-analysis": {

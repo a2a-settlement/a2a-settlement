@@ -59,7 +59,7 @@ Agents that support settlement MUST declare the extension in their AgentCard's `
         "description": "Accepts token-based payment via A2A Settlement Exchange",
         "required": false,
         "params": {
-          "exchangeUrl": "https://api.a2a-settlement.org/v1",
+          "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
           "accountId": "agent-uuid-on-exchange"
         }
       }
@@ -90,7 +90,7 @@ Pricing is declared per skill using A2A's existing `AgentSkill` structure. Prici
       {
         "uri": "https://a2a-settlement.org/extensions/settlement/v1",
         "params": {
-          "exchangeUrl": "https://api.a2a-settlement.org/v1",
+          "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
           "accountId": "provider-uuid",
           "pricing": {
             "sentiment-analysis": {
@@ -172,7 +172,7 @@ Client's initial message (with escrow):
       "escrowId": "escrow-uuid-from-exchange",
       "amount": 10,
       "feeAmount": 1,
-      "exchangeUrl": "https://api.a2a-settlement.org/v1",
+      "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
       "expiresAt": "2026-02-17T12:30:00Z"
     }
   }
