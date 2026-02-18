@@ -13,11 +13,15 @@ from exchange.config import get_session, settings
 from exchange.models import Account, Balance, Escrow, Transaction
 from exchange.schemas import (
     BalanceResponse,
+    BatchEscrowItem,
+    BatchEscrowRequest,
+    BatchEscrowResponse,
     DepositRequest,
     DepositResponse,
     DisputeRequest,
     DisputeResponse,
     EscrowDetailResponse,
+    EscrowListResponse,
     EscrowRequest,
     EscrowResponse,
     RefundRequest,
@@ -41,11 +45,77 @@ def _now() -> datetime:
 
 
 def _fee_amount(amount: int) -> int:
-    return int(math.ceil(amount * (settings.fee_percent / 100.0)))
+    pct_fee = math.ceil(amount * (settings.fee_percent / 100.0))
+    return int(max(pct_fee, settings.min_fee))
+
+
+def _effective_fee_percent(amount: int, fee: int) -> float:
+    if amount <= 0:
+        return 0.0
+    return round(fee / amount * 100.0, 4)
+
+
+def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
+    from exchange.schemas import Deliverable
+
+    deliverables = None
+    if escrow.deliverables:
+        deliverables = [Deliverable(**d) for d in escrow.deliverables]
+
+    return EscrowDetailResponse(
+        id=escrow.id,
+        requester_id=escrow.requester_id,
+        provider_id=escrow.provider_id,
+        amount=int(escrow.amount),
+        fee_amount=int(escrow.fee_amount),
+        effective_fee_percent=_effective_fee_percent(int(escrow.amount), int(escrow.fee_amount)),
+        status=escrow.status,
+        dispute_reason=escrow.dispute_reason,
+        expires_at=escrow.expires_at,
+        task_id=escrow.task_id,
+        task_type=escrow.task_type,
+        group_id=escrow.group_id,
+        depends_on=escrow.depends_on,
+        deliverables=deliverables,
+        created_at=escrow.created_at,
+        resolved_at=escrow.resolved_at,
+    )
 
 
 def _lock(stmt):
     return stmt.with_for_update()
+
+
+def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
+    """Auto-refund any held escrows that depend on the given (now-refunded) escrow."""
+    dependents = session.execute(
+        select(Escrow).where(and_(Escrow.status == "held", Escrow.depends_on.isnot(None)))
+    ).scalars().all()
+    for dep in dependents:
+        if dep.depends_on and upstream_escrow_id in dep.depends_on:
+            dep_total = int(dep.amount + dep.fee_amount)
+            bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == dep.requester_id))
+            ).scalar_one_or_none()
+            if bal is None:
+                continue
+            bal.available += dep_total
+            bal.held_in_escrow -= dep_total
+            session.add(bal)
+            dep.status = "refunded"
+            dep.resolved_at = _now()
+            session.add(dep)
+            session.add(
+                Transaction(
+                    escrow_id=dep.id,
+                    from_account=None,
+                    to_account=dep.requester_id,
+                    amount=dep_total,
+                    tx_type="escrow_refund",
+                    description=f"Auto-refunded: upstream escrow {upstream_escrow_id} was refunded",
+                )
+            )
+            _auto_refund_dependents(session, dep.id)
 
 
 def _expire_stale_escrows(session: Session) -> int:
@@ -157,6 +227,20 @@ def create_escrow(
         bal.held_in_escrow += total_hold
         session.add(bal)
 
+        if req.depends_on:
+            deps = session.execute(
+                select(Escrow).where(
+                    and_(Escrow.id.in_(req.depends_on), Escrow.requester_id == current["id"])
+                )
+            ).scalars().all()
+            if len(deps) != len(req.depends_on):
+                raise HTTPException(
+                    status_code=400,
+                    detail="One or more depends_on escrow IDs not found or not owned by requester",
+                )
+
+        deliverables_json = [d.model_dump() for d in req.deliverables] if req.deliverables else None
+
         escrow = Escrow(
             requester_id=current["id"],
             provider_id=req.provider_id,
@@ -164,6 +248,9 @@ def create_escrow(
             fee_amount=fee_amount,
             task_id=req.task_id,
             task_type=req.task_type,
+            group_id=req.group_id,
+            depends_on=req.depends_on,
+            deliverables=deliverables_json,
             status="held",
             expires_at=expires_at,
         )
@@ -189,9 +276,11 @@ def create_escrow(
         provider_id=req.provider_id,
         amount=int(req.amount),
         fee_amount=int(fee_amount),
+        effective_fee_percent=_effective_fee_percent(req.amount, fee_amount),
         total_held=int(total_hold),
         status=escrow.status,
         expires_at=escrow.expires_at,
+        group_id=escrow.group_id,
     )
 
 
@@ -211,6 +300,19 @@ def release(
             raise HTTPException(status_code=403, detail="Only the requester can release an escrow")
         if escrow.status != "held":
             raise HTTPException(status_code=400, detail=f"Escrow is already {escrow.status}")
+
+        if escrow.depends_on:
+            unresolved = session.execute(
+                select(Escrow).where(
+                    and_(Escrow.id.in_(escrow.depends_on), Escrow.status != "released")
+                )
+            ).scalars().all()
+            if unresolved:
+                ids = [e.id for e in unresolved]
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot release: upstream escrows not yet released: {ids}",
+                )
 
         total_held = int(escrow.amount + escrow.fee_amount)
 
@@ -315,6 +417,8 @@ def refund(
         if provider is not None:
             provider.reputation = max(0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1)
             session.add(provider)
+
+        _auto_refund_dependents(session, escrow.id)
 
     fire_webhook_event(session, escrow, "escrow.refunded")
 
@@ -518,7 +622,7 @@ def transactions(
                 from_account=tx.from_account,
                 to_account=tx.to_account,
                 amount=int(tx.amount),
-                tx_type=tx.tx_type,
+                type=tx.tx_type,
                 description=tx.description,
                 created_at=tx.created_at,
             )
@@ -537,17 +641,151 @@ def get_escrow(
         escrow = session.execute(select(Escrow).where(Escrow.id == escrow_id)).scalar_one_or_none()
         if escrow is None:
             raise HTTPException(status_code=404, detail="Escrow not found")
-        return EscrowDetailResponse(
-            id=escrow.id,
-            requester_id=escrow.requester_id,
-            provider_id=escrow.provider_id,
-            amount=int(escrow.amount),
-            fee_amount=int(escrow.fee_amount),
-            status=escrow.status,
-            dispute_reason=escrow.dispute_reason,
-            expires_at=escrow.expires_at,
-            task_id=escrow.task_id,
-            task_type=escrow.task_type,
-            created_at=escrow.created_at,
-            resolved_at=escrow.resolved_at,
+        return _escrow_detail(escrow)
+
+
+@router.get("/exchange/escrows", response_model=EscrowListResponse, tags=["Settlement"])
+def list_escrows(
+    task_id: str | None = None,
+    group_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> EscrowListResponse:
+    with session.begin():
+        stmt = select(Escrow).where(
+            or_(Escrow.requester_id == current["id"], Escrow.provider_id == current["id"])
         )
+        if task_id is not None:
+            stmt = stmt.where(Escrow.task_id == task_id)
+        if group_id is not None:
+            stmt = stmt.where(Escrow.group_id == group_id)
+        if status is not None:
+            stmt = stmt.where(Escrow.status == status)
+
+        from sqlalchemy import func as sa_func
+
+        count = session.execute(
+            select(sa_func.count()).select_from(stmt.subquery())
+        ).scalar_one()
+
+        rows = session.execute(
+            stmt.order_by(Escrow.created_at.desc()).limit(limit).offset(offset)
+        ).scalars().all()
+
+    return EscrowListResponse(
+        escrows=[_escrow_detail(e) for e in rows],
+        total=count,
+    )
+
+
+@router.post("/exchange/escrow/batch", status_code=201, response_model=BatchEscrowResponse, tags=["Settlement"])
+def batch_create_escrow(
+    req: BatchEscrowRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> BatchEscrowResponse:
+    group_id = req.group_id or str(uuid.uuid4())
+    created: list[EscrowResponse] = []
+
+    with session.begin():
+        _expire_stale_escrows(session)
+
+        bal = session.execute(_lock(select(Balance).where(Balance.account_id == current["id"]))).scalar_one_or_none()
+        if bal is None:
+            raise HTTPException(status_code=404, detail="Requester account not found")
+
+        total_needed = 0
+        for item in req.escrows:
+            if item.amount < settings.min_escrow or item.amount > settings.max_escrow:
+                raise HTTPException(status_code=400, detail=f"Amount must be between {settings.min_escrow} and {settings.max_escrow}")
+            if current["id"] == item.provider_id:
+                raise HTTPException(status_code=400, detail="Cannot escrow to yourself")
+            fee = _fee_amount(item.amount)
+            total_needed += item.amount + fee
+
+        if bal.available < total_needed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient balance for batch. Need {total_needed}, have {bal.available}",
+            )
+
+        created_escrows: list[Escrow] = []
+        for idx, item in enumerate(req.escrows):
+            fee = _fee_amount(item.amount)
+            total_hold = item.amount + fee
+            ttl = item.ttl_minutes or settings.default_ttl_minutes
+            expires_at = _now() + timedelta(minutes=ttl)
+
+            provider = session.execute(select(Account).where(Account.id == item.provider_id)).scalar_one_or_none()
+            if provider is None:
+                raise HTTPException(status_code=404, detail=f"Provider account not found: {item.provider_id}")
+            if provider.status != "active":
+                raise HTTPException(status_code=400, detail=f"Provider account is not active: {item.provider_id}")
+
+            resolved_deps: list[str] | None = None
+            if item.depends_on:
+                resolved_deps = []
+                for dep_ref in item.depends_on:
+                    if dep_ref.startswith("$"):
+                        dep_idx = int(dep_ref[1:])
+                        if dep_idx >= idx:
+                            raise HTTPException(status_code=400, detail=f"depends_on '${dep_idx}' must reference an earlier batch item")
+                        resolved_deps.append(created_escrows[dep_idx].id)
+                    else:
+                        resolved_deps.append(dep_ref)
+
+            deliverables_json = [d.model_dump() for d in item.deliverables] if item.deliverables else None
+
+            bal.available -= total_hold
+            bal.held_in_escrow += total_hold
+
+            escrow = Escrow(
+                requester_id=current["id"],
+                provider_id=item.provider_id,
+                amount=item.amount,
+                fee_amount=fee,
+                task_id=item.task_id,
+                task_type=item.task_type,
+                group_id=group_id,
+                depends_on=resolved_deps,
+                deliverables=deliverables_json,
+                status="held",
+                expires_at=expires_at,
+            )
+            session.add(escrow)
+            session.flush()
+            created_escrows.append(escrow)
+
+            session.add(
+                Transaction(
+                    escrow_id=escrow.id,
+                    from_account=current["id"],
+                    to_account=None,
+                    amount=total_hold,
+                    tx_type="escrow_hold",
+                    description=f"Batch escrow for task: {item.task_type or item.task_id or 'unspecified'}",
+                )
+            )
+
+            created.append(EscrowResponse(
+                escrow_id=escrow.id,
+                requester_id=current["id"],
+                provider_id=item.provider_id,
+                amount=int(item.amount),
+                fee_amount=int(fee),
+                effective_fee_percent=_effective_fee_percent(item.amount, fee),
+                total_held=int(total_hold),
+                status=escrow.status,
+                expires_at=escrow.expires_at,
+                group_id=group_id,
+            ))
+
+        session.add(bal)
+
+    for esc in created_escrows:
+        fire_webhook_event(session, esc, "escrow.created")
+
+    return BatchEscrowResponse(group_id=group_id, escrows=created)

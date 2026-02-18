@@ -26,7 +26,7 @@ def test_handwritten_spec_exists():
 def test_handwritten_spec_parses():
     spec = _load_handwritten_spec()
     assert spec["openapi"].startswith("3.1")
-    assert spec["info"]["version"] == "0.7.0"
+    assert spec["info"]["version"] == "0.8.0"
 
 
 def test_all_handwritten_paths_exist_in_fastapi(exchange_app):

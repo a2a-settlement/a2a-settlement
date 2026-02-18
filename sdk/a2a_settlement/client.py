@@ -39,12 +39,19 @@ class SettlementExchangeClient:
         *,
         bot_name: str,
         developer_id: str,
+        developer_name: str,
+        contact_email: str,
         description: str | None = None,
         skills: list[str] | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/accounts/register")
-        payload: dict[str, Any] = {"bot_name": bot_name, "developer_id": developer_id}
+        payload: dict[str, Any] = {
+            "bot_name": bot_name,
+            "developer_id": developer_id,
+            "developer_name": developer_name,
+            "contact_email": contact_email,
+        }
         if description is not None:
             payload["description"] = description
         if skills is not None:
@@ -118,6 +125,9 @@ class SettlementExchangeClient:
         task_id: str | None = None,
         task_type: str | None = None,
         ttl_minutes: int | None = None,
+        group_id: str | None = None,
+        depends_on: list[str] | None = None,
+        deliverables: list[dict[str, Any]] | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/escrow")
@@ -128,6 +138,12 @@ class SettlementExchangeClient:
             payload["task_type"] = task_type
         if ttl_minutes is not None:
             payload["ttl_minutes"] = ttl_minutes
+        if group_id is not None:
+            payload["group_id"] = group_id
+        if depends_on is not None:
+            payload["depends_on"] = depends_on
+        if deliverables is not None:
+            payload["deliverables"] = deliverables
 
         with self._client(idempotency_key=idempotency_key) as c:
             r = c.post(url, json=payload)
@@ -183,5 +199,43 @@ class SettlementExchangeClient:
         url = _join(self.base_url, f"/v1/exchange/escrows/{escrow_id}")
         with self._client() as c:
             r = c.get(url)
+            r.raise_for_status()
+            return r.json()
+
+    def list_escrows(
+        self,
+        *,
+        task_id: str | None = None,
+        group_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        url = _join(self.base_url, "/v1/exchange/escrows")
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if task_id is not None:
+            params["task_id"] = task_id
+        if group_id is not None:
+            params["group_id"] = group_id
+        if status is not None:
+            params["status"] = status
+        with self._client() as c:
+            r = c.get(url, params=params)
+            r.raise_for_status()
+            return r.json()
+
+    def batch_create_escrow(
+        self,
+        *,
+        escrows: list[dict[str, Any]],
+        group_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        url = _join(self.base_url, "/v1/exchange/escrow/batch")
+        payload: dict[str, Any] = {"escrows": escrows}
+        if group_id is not None:
+            payload["group_id"] = group_id
+        with self._client(idempotency_key=idempotency_key) as c:
+            r = c.post(url, json=payload)
             r.raise_for_status()
             return r.json()

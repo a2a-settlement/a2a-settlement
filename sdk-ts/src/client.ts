@@ -1,9 +1,12 @@
 import type {
   AccountResponse,
   BalanceResponse,
+  BatchEscrowRequest,
+  BatchEscrowResponse,
   DirectoryResponse,
   DisputeResponse,
   EscrowDetailResponse,
+  EscrowListResponse,
   EscrowRequest,
   EscrowResponse,
   HealthResponse,
@@ -235,6 +238,32 @@ export class SettlementExchangeClient {
 
   async getEscrow(escrowId: string): Promise<EscrowDetailResponse> {
     return this.request("GET", `/v1/exchange/escrows/${escrowId}`);
+  }
+
+  async listEscrows(options?: {
+    task_id?: string;
+    group_id?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<EscrowListResponse> {
+    const params: Record<string, string> = {};
+    if (options?.task_id) params["task_id"] = options.task_id;
+    if (options?.group_id) params["group_id"] = options.group_id;
+    if (options?.status) params["status"] = options.status;
+    if (options?.limit !== undefined) params["limit"] = String(options.limit);
+    if (options?.offset !== undefined)
+      params["offset"] = String(options.offset);
+    return this.request("GET", "/v1/exchange/escrows", undefined, { params });
+  }
+
+  async batchCreateEscrow(
+    req: BatchEscrowRequest,
+    idempotencyKey?: string,
+  ): Promise<BatchEscrowResponse> {
+    return this.request("POST", "/v1/exchange/escrow/batch", req, {
+      idempotencyKey,
+    });
   }
 
   // --- Stats ---

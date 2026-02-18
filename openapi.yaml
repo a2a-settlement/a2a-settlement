@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: A2A Settlement Exchange API
-  version: 0.7.0
+  version: 0.8.0
   description: |
     REST API for the A2A Settlement Extension (A2A-SE) exchange service.
     Provides escrow-based settlement for the Agent2Agent protocol.
@@ -255,6 +255,23 @@ components:
           nullable: true
 
     # --- Settlement ---
+    Deliverable:
+      type: object
+      required: [description]
+      properties:
+        description:
+          type: string
+          description: Human-readable description of the expected deliverable
+          examples: ["Sentiment analysis report in JSON format"]
+        artifact_hash:
+          type: string
+          description: SHA-256 hash of the expected artifact (for verification)
+          examples: ["sha256:a1b2c3d4..."]
+        acceptance_criteria:
+          type: string
+          description: Machine- or human-readable acceptance criteria
+          examples: ["JSON object with 'sentiment' and 'confidence' keys"]
+
     EscrowRequest:
       type: object
       required: [provider_id, amount]
@@ -281,10 +298,76 @@ components:
           minimum: 1
           description: Time-to-live in minutes (default 30)
           examples: [30]
+        group_id:
+          type: string
+          description: Groups related escrows for coordinated settlement (all-or-nothing)
+          examples: ["group-uuid-456"]
+        depends_on:
+          type: array
+          items:
+            type: string
+          description: List of escrow IDs that must be released before this escrow can be released
+          examples: [["escrow-uuid-1"]]
+        deliverables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deliverable"
+          description: Expected deliverables with optional hashes and acceptance criteria
+
+    BatchEscrowItem:
+      type: object
+      required: [provider_id, amount]
+      properties:
+        provider_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          minimum: 1
+        task_id:
+          type: string
+        task_type:
+          type: string
+        ttl_minutes:
+          type: integer
+          minimum: 1
+        depends_on:
+          type: array
+          items:
+            type: string
+          description: Escrow IDs or batch-local references ($0, $1, ...) for ordering
+        deliverables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deliverable"
+
+    BatchEscrowRequest:
+      type: object
+      required: [escrows]
+      properties:
+        group_id:
+          type: string
+          description: Group ID for the batch (auto-generated if omitted)
+        escrows:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchEscrowItem"
+          minItems: 1
+
+    BatchEscrowResponse:
+      type: object
+      required: [group_id, escrows]
+      properties:
+        group_id:
+          type: string
+        escrows:
+          type: array
+          items:
+            $ref: "#/components/schemas/EscrowResponse"
 
     EscrowResponse:
       type: object
-      required: [escrow_id, requester_id, provider_id, amount, fee_amount, total_held, status, expires_at]
+      required: [escrow_id, requester_id, provider_id, amount, fee_amount, effective_fee_percent, total_held, status, expires_at]
       properties:
         escrow_id:
           type: string
@@ -301,6 +384,11 @@ components:
         fee_amount:
           type: integer
           examples: [1]
+        effective_fee_percent:
+          type: number
+          format: float
+          description: Actual fee percentage charged (may exceed nominal rate due to minimum fee floor)
+          examples: [0.25]
         total_held:
           type: integer
           description: amount + fee_amount
@@ -311,6 +399,9 @@ components:
         expires_at:
           type: string
           format: date-time
+        group_id:
+          type: string
+          nullable: true
 
     ReleaseRequest:
       type: object
@@ -476,7 +567,7 @@ components:
 
     TransactionItem:
       type: object
-      required: [id, escrow_id, amount, tx_type, created_at]
+      required: [id, escrow_id, amount, type, created_at]
       properties:
         id:
           type: string
@@ -494,7 +585,7 @@ components:
           nullable: true
         amount:
           type: integer
-        tx_type:
+        type:
           type: string
           enum: [deposit, escrow_hold, escrow_release, escrow_refund, fee]
         description:
@@ -514,7 +605,7 @@ components:
 
     EscrowDetailResponse:
       type: object
-      required: [id, requester_id, provider_id, amount, fee_amount, status, expires_at, created_at]
+      required: [id, requester_id, provider_id, amount, fee_amount, effective_fee_percent, status, expires_at, created_at]
       properties:
         id:
           type: string
@@ -529,6 +620,10 @@ components:
           type: integer
         fee_amount:
           type: integer
+        effective_fee_percent:
+          type: number
+          format: float
+          description: Actual fee percentage charged
         status:
           type: string
           enum: [held, released, refunded, expired, disputed]
@@ -544,6 +639,19 @@ components:
         task_type:
           type: string
           nullable: true
+        group_id:
+          type: string
+          nullable: true
+        depends_on:
+          type: array
+          items:
+            type: string
+          nullable: true
+        deliverables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deliverable"
+          nullable: true
         created_at:
           type: string
           format: date-time
@@ -551,6 +659,17 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    EscrowListResponse:
+      type: object
+      required: [escrows, total]
+      properties:
+        escrows:
+          type: array
+          items:
+            $ref: "#/components/schemas/EscrowDetailResponse"
+        total:
+          type: integer
 
     # --- Webhooks ---
     WebhookSetRequest:
@@ -1228,6 +1347,100 @@ paths:
                 $ref: "#/components/schemas/TransactionsResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /exchange/escrows:
+    get:
+      tags: [Settlement]
+      operationId: listEscrows
+      summary: List and query escrows
+      description: Returns escrows for the authenticated account, optionally filtered by task_id, group_id, or status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: task_id
+          in: query
+          schema:
+            type: string
+          description: Filter by A2A task ID
+        - name: group_id
+          in: query
+          schema:
+            type: string
+          description: Filter by group ID
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [held, released, refunded, expired, disputed]
+          description: Filter by escrow status
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Escrow list
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscrowListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /exchange/escrow/batch:
+    post:
+      tags: [Settlement]
+      operationId: batchCreateEscrow
+      summary: Create multiple escrows atomically
+      description: |
+        Creates multiple escrows in a single atomic operation. All escrows share the same group_id.
+        Use `$N` syntax in depends_on to reference earlier items in the batch by index (e.g., `$0` references the first item).
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchEscrowRequest"
+      responses:
+        "201":
+          description: Batch escrow created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchEscrowResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /exchange/escrows/{escrow_id}:
     get:

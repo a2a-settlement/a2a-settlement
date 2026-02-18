@@ -1,6 +1,6 @@
 # A2A Settlement Extension (A2A-SE)
 
-Specification v0.7.0
+Specification v0.8.0
 
 Extension URI: `https://a2a-settlement.org/extensions/settlement/v1`
 
@@ -157,7 +157,9 @@ WORKING         ──────►    No settlement action
 INPUT_REQUIRED  ──────►    No settlement action
                            (escrow continues to hold during multi-turn)
 
-COMPLETED       ──────►    Client releases escrow
+COMPLETED       ──────►    Client enters review (optional)
+                           (settlementStatus: "review")
+                           Client releases escrow
                            (tokens move: held → provider's available)
                            (fee deducted to treasury)
 
@@ -224,6 +226,7 @@ Provider's task response (acknowledging settlement):
 |--------|---------|
 | `pending` | Escrow created on exchange, awaiting agent acknowledgment |
 | `acknowledged` | Agent confirmed receipt of escrow reference |
+| `review` | Task completed, requester is reviewing deliverables before release |
 | `released` | Task completed, tokens transferred to provider |
 | `refunded` | Task failed/canceled, tokens returned to requester |
 | `expired` | Escrow TTL exceeded without resolution |
@@ -329,6 +332,8 @@ All error responses use a consistent envelope:
 | `PUT` | `/accounts/webhook` | API Key | Register or update webhook URL |
 | `DELETE` | `/accounts/webhook` | API Key | Remove webhook configuration |
 | `POST` | `/exchange/escrow` | API Key | Lock tokens for a pending A2A task |
+| `POST` | `/exchange/escrow/batch` | API Key | Atomically create multiple linked escrows |
+| `GET` | `/exchange/escrows` | API Key | List/query escrows by task_id, group_id, or status |
 | `POST` | `/exchange/release` | API Key | Task completed -- pay the provider |
 | `POST` | `/exchange/refund` | API Key | Task failed -- return tokens to requester |
 | `POST` | `/exchange/dispute` | API Key | Flag an escrow as disputed, freezing funds |
@@ -445,7 +450,16 @@ Idempotency-Key: <client-generated-uuid>
   "amount": 10,
   "task_id": "a2a-task-uuid",
   "task_type": "sentiment-analysis",
-  "ttl_minutes": 30
+  "ttl_minutes": 30,
+  "group_id": "group-uuid",
+  "depends_on": ["upstream-escrow-uuid"],
+  "deliverables": [
+    {
+      "description": "Sentiment analysis report in JSON",
+      "artifact_hash": "sha256:a1b2c3...",
+      "acceptance_criteria": "JSON with 'sentiment' and 'confidence' keys"
+    }
+  ]
 }
 ```
 
@@ -456,6 +470,17 @@ Idempotency-Key: <client-generated-uuid>
 | `task_id` | string | No | A2A task ID for correlation |
 | `task_type` | string | No | Skill/task type identifier |
 | `ttl_minutes` | integer | No | Time-to-live in minutes (default: 30) |
+| `group_id` | string | No | Groups related escrows for coordinated settlement |
+| `depends_on` | string[] | No | Escrow IDs that must be released before this one |
+| `deliverables` | Deliverable[] | No | Expected deliverables with acceptance criteria |
+
+#### Deliverable Schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `description` | string | Yes | Human-readable deliverable description |
+| `artifact_hash` | string | No | SHA-256 hash of the expected artifact for verification |
+| `acceptance_criteria` | string | No | Machine- or human-readable acceptance criteria |
 
 Response `201 Created`:
 
@@ -466,9 +491,84 @@ Response `201 Created`:
   "provider_id": "provider-agent-uuid",
   "amount": 10,
   "fee_amount": 1,
+  "effective_fee_percent": 10.0,
   "total_held": 11,
   "status": "held",
-  "expires_at": "2026-02-17T12:30:00Z"
+  "expires_at": "2026-02-17T12:30:00Z",
+  "group_id": "group-uuid"
+}
+```
+
+The `effective_fee_percent` field shows the actual fee rate charged. Due to the minimum fee floor (see Section 7), this may exceed the nominal 0.25% rate on small escrows. Clients SHOULD display this value for transparency.
+
+### 4.6.1. Escrow Lookup
+
+```
+GET /exchange/escrows?task_id=a2a-task-uuid
+GET /exchange/escrows?group_id=group-uuid
+GET /exchange/escrows?status=held
+Authorization: Bearer ate_<api_key>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `task_id` | string | Filter by A2A task ID |
+| `group_id` | string | Filter by escrow group |
+| `status` | string | Filter by escrow status (`held`, `released`, `refunded`, `expired`, `disputed`) |
+| `limit` | integer | Page size (default: 50, max: 200) |
+| `offset` | integer | Pagination offset (default: 0) |
+
+Response `200 OK`:
+
+```json
+{
+  "escrows": [ { "...escrow detail..." } ],
+  "total": 2
+}
+```
+
+This endpoint enables recovery when the orchestrator loses the `escrow_id` -- it can look up the escrow by `task_id` or retrieve all escrows in a group.
+
+### 4.6.2. Batch Escrow Creation
+
+```
+POST /exchange/escrow/batch
+Authorization: Bearer ate_<api_key>
+Idempotency-Key: <client-generated-uuid>
+
+{
+  "group_id": "group-uuid",
+  "escrows": [
+    {
+      "provider_id": "provider-a-uuid",
+      "amount": 10,
+      "task_id": "task-1",
+      "task_type": "research"
+    },
+    {
+      "provider_id": "provider-b-uuid",
+      "amount": 15,
+      "task_id": "task-2",
+      "task_type": "writing",
+      "depends_on": ["$0"]
+    }
+  ]
+}
+```
+
+All escrows in a batch are created atomically. If any validation fails, no escrows are created. All escrows share the same `group_id` (auto-generated if omitted).
+
+The `depends_on` field within a batch MAY use positional references (`$0`, `$1`, ...) to refer to earlier items in the batch by index. These are resolved to actual escrow IDs after creation.
+
+Response `201 Created`:
+
+```json
+{
+  "group_id": "group-uuid",
+  "escrows": [
+    { "escrow_id": "esc-1", "...fields..." },
+    { "escrow_id": "esc-2", "depends_on": ["esc-1"], "...fields..." }
+  ]
 }
 ```
 
@@ -796,9 +896,12 @@ The defaults below apply to the reference exchange at `exchange.a2a-settlement.o
 | Currency | ATE | Default settlement credit. Exchanges MAY support additional currencies via the `currency` pricing field. |
 | Starter credit | 100 credits | Onboarding credit funded from exchange treasury to reduce adoption friction |
 | Settlement fee | 0.25% | Deducted from escrow on release, credited to exchange operator treasury |
+| Minimum fee | 1 credit | Fee floor per escrow. On small amounts, this floor applies instead of the percentage. |
 | Escrow TTL | 30 minutes | Auto-refund if not resolved |
 | Min escrow | 1 credit | Minimum per transaction |
 | Max escrow | 10,000 credits | Maximum per transaction |
+
+**Fee floor and effective rate.** The minimum fee of 1 credit means that for small escrows, the effective fee rate exceeds the nominal 0.25%. For example, a 15-token escrow pays 1 token in fees (6.67% effective rate). The `effective_fee_percent` field in the escrow response makes this transparent. Exchange operators MAY adjust the minimum fee via `A2A_EXCHANGE_MIN_FEE`.
 
 ### 7.1. Credit Flow
 
@@ -850,6 +953,69 @@ When either party flags a transaction as `disputed`, the exchange freezes the es
 5. The escrow settles according to the resolution. Reputation is updated as if the task completed or failed normally.
 
 **Future versions** will support pluggable resolution strategies, including third-party arbitrators and AI mediator panels. The `POST /exchange/resolve` endpoint will accept an optional `strategy` field to select a resolution mechanism.
+
+### 7.4. Deliverable Verification
+
+The `deliverables` field on escrow creation (Section 4.6) provides a protocol-level standard for describing expected work products. This enables both parties to agree on acceptance criteria before work begins, and provides a basis for dispute resolution.
+
+**Workflow:**
+
+1. **Escrow creation.** The requester includes a `deliverables` array describing what they expect. Each deliverable has a `description`, optional `artifact_hash` (for deterministic outputs), and optional `acceptance_criteria`.
+2. **Task processing.** The provider works on the task normally per A2A.
+3. **Review.** When the task reaches COMPLETED, the requester sets `settlementStatus: "review"` in the A2A metadata to signal that deliverables are being verified. The escrow remains `held` on the exchange during review.
+4. **Acceptance.** If deliverables meet criteria, the requester calls `POST /exchange/release`.
+5. **Rejection.** If deliverables do not meet criteria, the requester calls `POST /exchange/dispute` with specific reasons referencing the acceptance criteria.
+
+The `artifact_hash` field enables automated verification: if the provider's output artifact hashes to the expected value, the requester can auto-release. If not, the requester can dispute with concrete evidence.
+
+Providers SHOULD verify the `deliverables` array on the escrow before beginning work to ensure they can meet the stated criteria.
+
+### 7.5. Compound and Linked Escrows
+
+Complex tasks often involve multiple providers or multi-stage workflows. The `group_id` field links related escrows into a coordinated group.
+
+**Use cases:**
+
+- **Multi-provider tasks.** A single job requires work from two agents (e.g., researcher + writer). Both escrows share a `group_id` so all parties can query group status.
+- **Multi-deliverable tasks.** One provider delivers multiple artifacts under separate escrows, each with its own deliverables and acceptance criteria.
+
+**Querying groups.** `GET /exchange/escrows?group_id=<id>` returns all escrows in a group. This enables orchestrators to monitor coordinated work holistically.
+
+**Batch creation.** `POST /exchange/escrow/batch` (Section 4.6.2) creates all escrows in a group atomically. If any validation fails, no escrows are created. This prevents partial-creation states where some escrows exist but others don't.
+
+### 7.6. Pipeline Dependency Modeling
+
+The `depends_on` field models sequential dependencies between escrows. An escrow with `depends_on: ["esc-1"]` cannot be released until `esc-1` has been released.
+
+**Enforcement rules:**
+
+- **On creation:** The exchange validates that all referenced escrow IDs exist and belong to the same requester.
+- **On release:** The exchange rejects release calls if any dependency has not been released. Error: `"Cannot release: upstream escrows not yet released"`.
+- **On refund:** When an upstream escrow is refunded, the exchange auto-refunds all downstream escrows that depend on it (cascade refund). This prevents orphaned escrows that can never be released.
+
+**Example pipeline:**
+
+```
+Escrow #1 (research) ──depends_on──► Escrow #2 (writing)
+```
+
+If research fails and Escrow #1 is refunded, Escrow #2 is automatically refunded. If research succeeds and Escrow #1 is released, Escrow #2 can then be released independently.
+
+### 7.7. Escrow Context Propagation Through Proxies
+
+The spec defines `a2a-se.escrowId` in A2A message metadata for passing escrow context between agents. However, when agents are invoked through non-A2A interfaces (e.g., OpenAI-compatible HTTP API gateways, LangChain tool calls, or other intermediary layers), the A2A metadata block is not available.
+
+**Recommended propagation strategies:**
+
+1. **HTTP header propagation.** Intermediary layers SHOULD forward the `X-A2A-SE-Escrow-Id` HTTP header if present. Gateways that translate between protocols SHOULD extract this header and include it in downstream requests.
+
+2. **Tool/function call metadata.** When invoking agents via function-calling interfaces, the escrow ID SHOULD be included as a parameter named `a2a_se_escrow_id` in the function arguments.
+
+3. **System prompt injection.** As a last resort, orchestrators MAY inject the escrow reference into the system prompt or user message: `[a2a-se: escrow_id=<id>]`. The receiving agent SHOULD parse and verify this via the exchange API.
+
+4. **Gateway responsibility.** API gateways that front A2A-capable agents SHOULD document which propagation mechanism they support and translate escrow context between the external protocol and the A2A metadata format.
+
+**Verification is mandatory regardless of propagation method.** Providers MUST always verify the escrow via `GET /exchange/escrows/{escrow_id}` before performing work, regardless of how they received the escrow reference.
 
 ---
 
@@ -1172,6 +1338,19 @@ A2A-SE can use AP2 as an upstream negotiation layer: AP2 negotiates the payment 
 ---
 
 ## 13. Changelog
+
+### v0.8.0 (2026-02-18)
+
+- Added deliverable verification standard: `deliverables` schema on escrow creation with `description`, `artifact_hash`, and `acceptance_criteria` fields (Section 7.4).
+- Added `review` settlement status for deliverable review between task completion and release (Section 3.3).
+- Added compound/linked escrow support via `group_id` field (Section 7.5).
+- Added pipeline dependency modeling via `depends_on` field with cascade auto-refund (Section 7.6).
+- Added `POST /exchange/escrow/batch` for atomic multi-escrow creation (Section 4.6.2).
+- Added `GET /exchange/escrows` for querying escrows by `task_id`, `group_id`, or `status` (Section 4.6.1).
+- Added escrow context propagation guidance for non-A2A intermediary layers (Section 7.7).
+- Added minimum fee floor (1 credit) and `effective_fee_percent` in escrow response (Section 7).
+- **Breaking:** Renamed `tx_type` to `type` in transaction responses.
+- **Breaking:** `developer_name` and `contact_email` are now required in SDK `register_account()`.
 
 ### v0.7.0 (2026-02-18)
 

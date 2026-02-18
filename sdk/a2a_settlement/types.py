@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 
+class Deliverable(TypedDict, total=False):
+    description: str
+    artifact_hash: str
+    acceptance_criteria: str
+
+
 class RegisterResponse(TypedDict, total=False):
     message: str
     account: dict[str, Any]
@@ -16,9 +22,11 @@ class EscrowResponse(TypedDict, total=False):
     provider_id: str
     amount: int
     fee_amount: int
+    effective_fee_percent: float
     total_held: int
     status: str
     expires_at: str
+    group_id: str
 
 
 class ReleaseResponse(TypedDict, total=False):
@@ -64,6 +72,17 @@ class BalanceResponse(TypedDict, total=False):
     total_spent: int
 
 
+class TransactionItem(TypedDict, total=False):
+    id: str
+    escrow_id: str
+    from_account: str
+    to_account: str
+    amount: int
+    type: str
+    description: str
+    created_at: str
+
+
 class RotateKeyResponse(TypedDict, total=False):
     api_key: str
     grace_period_minutes: int
@@ -74,3 +93,13 @@ class WebhookResponse(TypedDict, total=False):
     secret: str
     events: list[str]
     active: bool
+
+
+class BatchEscrowResponse(TypedDict, total=False):
+    group_id: str
+    escrows: list[EscrowResponse]
+
+
+class EscrowListResponse(TypedDict, total=False):
+    escrows: list[dict[str, Any]]
+    total: int

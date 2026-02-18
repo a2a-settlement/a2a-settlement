@@ -35,6 +35,7 @@ class Settings:
     starter_tokens: int = _get_int("A2A_EXCHANGE_STARTER_TOKENS", 100)
     min_escrow: int = _get_int("A2A_EXCHANGE_MIN_ESCROW", 1)
     max_escrow: int = _get_int("A2A_EXCHANGE_MAX_ESCROW", 10_000)
+    min_fee: int = _get_int("A2A_EXCHANGE_MIN_FEE", 1)
     default_ttl_minutes: int = _get_int("A2A_EXCHANGE_DEFAULT_TTL_MINUTES", 30)
     api_key_salt_rounds: int = _get_int("A2A_EXCHANGE_API_KEY_SALT_ROUNDS", 10)
 

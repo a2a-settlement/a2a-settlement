@@ -14,6 +14,8 @@ export interface ErrorResponse {
 export interface RegisterRequest {
   bot_name: string;
   developer_id: string;
+  developer_name: string;
+  contact_email: string;
   description?: string;
   skills?: string[];
 }
@@ -22,6 +24,8 @@ export interface RegisterAccountInfo {
   id: string;
   bot_name: string;
   developer_id: string;
+  developer_name: string;
+  contact_email: string;
   description?: string;
   skills: string[];
   status: string;
@@ -62,6 +66,13 @@ export interface RotateKeyResponse {
   grace_period_minutes: number;
 }
 
+/** Deliverable description for escrow creation. */
+export interface Deliverable {
+  description: string;
+  artifact_hash?: string;
+  acceptance_criteria?: string;
+}
+
 /** POST /exchange/escrow request body. */
 export interface EscrowRequest {
   provider_id: string;
@@ -69,6 +80,9 @@ export interface EscrowRequest {
   task_id?: string;
   task_type?: string;
   ttl_minutes?: number;
+  group_id?: string;
+  depends_on?: string[];
+  deliverables?: Deliverable[];
 }
 
 export interface EscrowResponse {
@@ -77,9 +91,11 @@ export interface EscrowResponse {
   provider_id: string;
   amount: number;
   fee_amount: number;
+  effective_fee_percent: number;
   total_held: number;
   status: string;
   expires_at: string;
+  group_id?: string;
 }
 
 export interface ReleaseResponse {
@@ -139,7 +155,7 @@ export interface TransactionItem {
   from_account?: string;
   to_account?: string;
   amount: number;
-  tx_type: string;
+  type: string;
   description?: string;
   created_at?: string;
 }
@@ -154,13 +170,42 @@ export interface EscrowDetailResponse {
   provider_id: string;
   amount: number;
   fee_amount: number;
+  effective_fee_percent: number;
   status: string;
   dispute_reason?: string;
   expires_at: string;
   task_id?: string;
   task_type?: string;
+  group_id?: string;
+  depends_on?: string[];
+  deliverables?: Deliverable[];
   created_at?: string;
   resolved_at?: string;
+}
+
+export interface EscrowListResponse {
+  escrows: EscrowDetailResponse[];
+  total: number;
+}
+
+export interface BatchEscrowItem {
+  provider_id: string;
+  amount: number;
+  task_id?: string;
+  task_type?: string;
+  ttl_minutes?: number;
+  depends_on?: string[];
+  deliverables?: Deliverable[];
+}
+
+export interface BatchEscrowRequest {
+  group_id?: string;
+  escrows: BatchEscrowItem[];
+}
+
+export interface BatchEscrowResponse {
+  group_id: string;
+  escrows: EscrowResponse[];
 }
 
 export interface WebhookSetRequest {

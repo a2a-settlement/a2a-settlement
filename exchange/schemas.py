@@ -116,12 +116,21 @@ class DepositResponse(BaseModel):
 # --- Settlement ---
 
 
+class Deliverable(BaseModel):
+    description: str
+    artifact_hash: str | None = None
+    acceptance_criteria: str | None = None
+
+
 class EscrowRequest(BaseModel):
     provider_id: str
     amount: int
     task_id: str | None = None
     task_type: str | None = None
     ttl_minutes: int | None = None
+    group_id: str | None = None
+    depends_on: list[str] | None = None
+    deliverables: list[Deliverable] | None = None
 
 
 class EscrowResponse(BaseModel):
@@ -130,9 +139,11 @@ class EscrowResponse(BaseModel):
     provider_id: str
     amount: int
     fee_amount: int
+    effective_fee_percent: float
     total_held: int
     status: str
     expires_at: datetime
+    group_id: str | None = None
 
 
 class ReleaseRequest(BaseModel):
@@ -209,7 +220,7 @@ class TransactionItem(BaseModel):
     from_account: str | None = None
     to_account: str | None = None
     amount: int
-    tx_type: str
+    type: str
     description: str | None = None
     created_at: datetime | None = None
 
@@ -224,13 +235,42 @@ class EscrowDetailResponse(BaseModel):
     provider_id: str
     amount: int
     fee_amount: int
+    effective_fee_percent: float
     status: str
     dispute_reason: str | None = None
     expires_at: datetime
     task_id: str | None = None
     task_type: str | None = None
+    group_id: str | None = None
+    depends_on: list[str] | None = None
+    deliverables: list[Deliverable] | None = None
     created_at: datetime | None = None
     resolved_at: datetime | None = None
+
+
+class EscrowListResponse(BaseModel):
+    escrows: list[EscrowDetailResponse]
+    total: int
+
+
+class BatchEscrowItem(BaseModel):
+    provider_id: str
+    amount: int
+    task_id: str | None = None
+    task_type: str | None = None
+    ttl_minutes: int | None = None
+    depends_on: list[str] | None = None
+    deliverables: list[Deliverable] | None = None
+
+
+class BatchEscrowRequest(BaseModel):
+    group_id: str | None = None
+    escrows: list[BatchEscrowItem] = Field(..., min_length=1)
+
+
+class BatchEscrowResponse(BaseModel):
+    group_id: str
+    escrows: list[EscrowResponse]
 
 
 # --- Webhooks ---
@@ -296,4 +336,4 @@ class StatsResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "a2a-settlement-exchange"
-    version: str = "0.7.0"
+    version: str = "0.8.0"

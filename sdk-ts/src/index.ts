@@ -19,6 +19,7 @@ export {
 export type {
   ErrorDetail,
   ErrorResponse,
+  Deliverable,
   RegisterRequest,
   RegisterResponse,
   AccountResponse,
@@ -37,6 +38,10 @@ export type {
   TransactionItem,
   TransactionsResponse,
   EscrowDetailResponse,
+  EscrowListResponse,
+  BatchEscrowItem,
+  BatchEscrowRequest,
+  BatchEscrowResponse,
   WebhookResponse,
   WebhookDeleteResponse,
   StatsResponse,
