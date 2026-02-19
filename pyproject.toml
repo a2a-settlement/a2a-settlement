@@ -21,6 +21,13 @@ exchange = [
 examples = [
   "a2a-sdk[http-server]>=0.3",
 ]
+compliance = [
+  "pydantic>=2.0",
+  "rfc3161ng>=2.0",
+  "pyasn1>=0.4",
+  "pyasn1-modules>=0.2",
+  "cryptography>=41.0",
+]
 dev = [
   "pytest>=7.0",
   "pyyaml>=6.0",
@@ -31,5 +38,5 @@ a2a-exchange = "exchange.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["exchange"]
+include = ["exchange", "compliance"]
 
