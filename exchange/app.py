@@ -23,7 +23,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="A2A Settlement Exchange",
-        version="0.8.0",
+        version="0.8.1",
         description=(
             "REST API for the A2A Settlement Extension (A2A-SE) exchange service. "
             "Provides escrow-based token settlement for the Agent2Agent protocol."

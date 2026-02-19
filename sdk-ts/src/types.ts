@@ -173,6 +173,7 @@ export interface EscrowDetailResponse {
   effective_fee_percent: number;
   status: string;
   dispute_reason?: string;
+  resolution_strategy?: string;
   expires_at: string;
   task_id?: string;
   task_type?: string;

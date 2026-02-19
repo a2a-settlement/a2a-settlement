@@ -74,6 +74,7 @@ class Escrow(Base):
     deliverables: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="held", index=True)
     dispute_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_strategy: Mapped[str | None] = mapped_column(String(100), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

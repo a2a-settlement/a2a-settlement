@@ -212,10 +212,12 @@ export class SettlementExchangeClient {
   async resolveEscrow(
     escrowId: string,
     resolution: "release" | "refund",
+    options?: { strategy?: string },
   ): Promise<ResolveResponse> {
     return this.request("POST", "/v1/exchange/resolve", {
       escrow_id: escrowId,
       resolution,
+      ...(options?.strategy != null && { strategy: options.strategy }),
     });
   }
 

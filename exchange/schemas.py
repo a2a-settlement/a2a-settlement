@@ -184,6 +184,7 @@ class DisputeResponse(BaseModel):
 class ResolveRequest(BaseModel):
     escrow_id: str
     resolution: str
+    strategy: str | None = None
 
 
 class ResolveReleaseResponse(BaseModel):
@@ -238,6 +239,7 @@ class EscrowDetailResponse(BaseModel):
     effective_fee_percent: float
     status: str
     dispute_reason: str | None = None
+    resolution_strategy: str | None = None
     expires_at: datetime
     task_id: str | None = None
     task_type: str | None = None
@@ -336,4 +338,4 @@ class StatsResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "a2a-settlement-exchange"
-    version: str = "0.8.0"
+    version: str = "0.8.1"

@@ -174,10 +174,13 @@ class SettlementExchangeClient:
             r.raise_for_status()
             return r.json()
 
-    def resolve_escrow(self, *, escrow_id: str, resolution: str) -> dict[str, Any]:
+    def resolve_escrow(self, *, escrow_id: str, resolution: str, strategy: str | None = None) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/resolve")
+        body: dict[str, Any] = {"escrow_id": escrow_id, "resolution": resolution}
+        if strategy is not None:
+            body["strategy"] = strategy
         with self._client() as c:
-            r = c.post(url, json={"escrow_id": escrow_id, "resolution": resolution})
+            r = c.post(url, json=body)
             r.raise_for_status()
             return r.json()
 

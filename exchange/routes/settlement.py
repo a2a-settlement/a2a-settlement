@@ -71,6 +71,7 @@ def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
         effective_fee_percent=_effective_fee_percent(int(escrow.amount), int(escrow.fee_amount)),
         status=escrow.status,
         dispute_reason=escrow.dispute_reason,
+        resolution_strategy=escrow.resolution_strategy,
         expires_at=escrow.expires_at,
         task_id=escrow.task_id,
         task_type=escrow.task_type,
@@ -450,6 +451,7 @@ def dispute(
         session.add(escrow)
 
     fire_webhook_event(session, escrow, "escrow.disputed")
+    fire_webhook_event(session, escrow, "escrow.dispute_pending_mediation")
 
     return DisputeResponse(
         escrow_id=req.escrow_id,
@@ -477,6 +479,7 @@ def resolve(
         if escrow.status != "disputed":
             raise HTTPException(status_code=400, detail=f"Escrow is not disputed (status: {escrow.status})")
 
+        escrow.resolution_strategy = req.strategy
         total_held = int(escrow.amount + escrow.fee_amount)
 
         if req.resolution == "release":

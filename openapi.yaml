@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: A2A Settlement Exchange API
-  version: 0.8.0
+  version: 0.8.1
   description: |
     REST API for the A2A Settlement Extension (A2A-SE) exchange service.
     Provides escrow-based settlement for the Agent2Agent protocol.
@@ -496,6 +496,10 @@ components:
           type: string
           enum: [release, refund]
           description: Must be "release" or "refund"
+        strategy:
+          type: string
+          description: Identifier of the resolution strategy that produced this verdict (e.g., "manual", "ai-mediator"). Recorded for audit purposes.
+          examples: ["ai-mediator"]
 
     ResolveReleaseResponse:
       type: object
@@ -630,6 +634,10 @@ components:
         dispute_reason:
           type: string
           nullable: true
+        resolution_strategy:
+          type: string
+          nullable: true
+          description: Strategy identifier recorded when the dispute was resolved (e.g., "manual", "ai-mediator")
         expires_at:
           type: string
           format: date-time
@@ -691,6 +699,7 @@ components:
               - escrow.refunded
               - escrow.expired
               - escrow.disputed
+              - escrow.dispute_pending_mediation
               - escrow.resolved
           description: Event types to subscribe to (default all)
 
@@ -724,6 +733,7 @@ components:
             - escrow.refunded
             - escrow.expired
             - escrow.disputed
+            - escrow.dispute_pending_mediation
             - escrow.resolved
         timestamp:
           type: string
@@ -776,7 +786,7 @@ components:
           examples: ["a2a-settlement-exchange"]
         version:
           type: string
-          examples: ["0.7.0"]
+          examples: ["0.8.1"]
 
   parameters:
     RequestId:

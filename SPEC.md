@@ -1,6 +1,6 @@
 # A2A Settlement Extension (A2A-SE)
 
-Specification v0.8.0
+Specification v0.8.1
 
 Extension URI: `https://a2a-settlement.org/extensions/settlement/v1`
 
@@ -659,11 +659,18 @@ Authorization: Bearer ate_<operator_key>
 
 {
   "escrow_id": "escrow-uuid",
-  "resolution": "release"
+  "resolution": "release",
+  "strategy": "ai-mediator"
 }
 ```
 
-`resolution` MUST be one of `"release"` or `"refund"`.
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `escrow_id` | string | Yes | UUID of the disputed escrow |
+| `resolution` | string | Yes | Must be `"release"` or `"refund"` |
+| `strategy` | string | No | Identifier of the resolution strategy that produced this verdict (see Section 7.3.1). Recorded in the audit trail. |
+
+`resolution` MUST be one of `"release"` or `"refund"`. When `strategy` is provided, the exchange records it on the escrow for audit purposes but does not change resolution behavior — the `resolution` field is always authoritative.
 
 ### 4.11. Webhooks
 
@@ -678,7 +685,8 @@ Authorization: Bearer ate_<api_key>
 {
   "url": "https://my-agent.example.com/webhooks/settlement",
   "events": ["escrow.created", "escrow.released", "escrow.refunded",
-             "escrow.expired", "escrow.disputed", "escrow.resolved"]
+             "escrow.expired", "escrow.disputed",
+             "escrow.dispute_pending_mediation", "escrow.resolved"]
 }
 ```
 
@@ -689,7 +697,8 @@ Response `200 OK`:
   "webhook_url": "https://my-agent.example.com/webhooks/settlement",
   "secret": "whsec_abc123...",
   "events": ["escrow.created", "escrow.released", "escrow.refunded",
-             "escrow.expired", "escrow.disputed", "escrow.resolved"],
+             "escrow.expired", "escrow.disputed",
+             "escrow.dispute_pending_mediation", "escrow.resolved"],
   "active": true
 }
 ```
@@ -746,6 +755,7 @@ valid = constant_time_compare(expected, signature_from_header)
 | `escrow.refunded` | Escrow is refunded via `POST /exchange/refund` or dispute resolution |
 | `escrow.expired` | Escrow TTL exceeded, auto-refunded |
 | `escrow.disputed` | Escrow flagged as disputed |
+| `escrow.dispute_pending_mediation` | Dispute filed; escrow is awaiting external mediation (fired immediately after `escrow.disputed` when the exchange has pluggable resolution enabled) |
 | `escrow.resolved` | Disputed escrow resolved by operator |
 
 ---
@@ -944,15 +954,53 @@ The 0.25% settlement fee is deliberately low to encourage adoption and transacti
 
 When either party flags a transaction as `disputed`, the exchange freezes the escrow: no release or refund can proceed until the dispute is resolved.
 
-**v0.5 resolution model (manual):**
+**Manual resolution (default):**
 
 1. Either the requester or provider calls `POST /exchange/dispute` with the `escrow_id` and a `reason`.
 2. The escrow status transitions to `disputed`. All release and refund calls are rejected while in this state.
-3. The exchange operator reviews the dispute out-of-band (support channel, logs, task artifacts).
-4. The operator calls `POST /exchange/resolve` with the `escrow_id` and a `resolution` of `"release"` or `"refund"`.
-5. The escrow settles according to the resolution. Reputation is updated as if the task completed or failed normally.
+3. The exchange fires `escrow.disputed` followed by `escrow.dispute_pending_mediation` to notify any registered mediation services.
+4. The exchange operator (or an authorized mediator service) reviews the dispute out-of-band (support channel, logs, task artifacts).
+5. The operator calls `POST /exchange/resolve` with the `escrow_id`, a `resolution` of `"release"` or `"refund"`, and an optional `strategy` identifying how the verdict was reached.
+6. The escrow settles according to the resolution. Reputation is updated as if the task completed or failed normally.
 
-**Future versions** will support pluggable resolution strategies, including third-party arbitrators and AI mediator panels. The `POST /exchange/resolve` endpoint will accept an optional `strategy` field to select a resolution mechanism.
+### 7.3.1. Pluggable Resolution Strategies
+
+The exchange supports pluggable dispute resolution via two mechanisms:
+
+1. **The `escrow.dispute_pending_mediation` webhook event.** When a dispute is filed, the exchange fires this event immediately after `escrow.disputed`. External mediation services (AI mediators, arbitration panels, DAO voting contracts) subscribe to this event and autonomously evaluate the dispute. When the mediator reaches a verdict, it calls `POST /exchange/resolve` using operator credentials.
+
+2. **The `strategy` field on `POST /exchange/resolve`.** When resolving a dispute, the caller MAY include a `strategy` string that identifies the resolution mechanism used (e.g., `"manual"`, `"ai-mediator"`, `"arbitration-panel"`). The exchange records this value in the audit trail but does not interpret it — the `resolution` field (`"release"` or `"refund"`) remains authoritative.
+
+**Integration pattern for an AI mediator:**
+
+```
+Agent A disputes escrow
+        │
+        ▼
+  ┌─────────────┐     escrow.dispute_pending_mediation
+  │  Exchange    │────webhook────▶┌──────────────┐
+  │              │                │  Mediator     │
+  └─────────────┘◀───resolve─────│  Service      │
+                   (strategy:     └──────┬───────┘
+                    "ai-mediator")       │
+                              ┌──────────┴──────────┐
+                              │                     │
+                        confidence ≥ threshold  confidence < threshold
+                              │                     │
+                        Auto-resolve          Escalate to
+                        (release/refund)      human operator
+```
+
+**Strategy values** are free-form strings. The exchange does not maintain a registry of valid strategies. Conventions:
+
+| Strategy | Description |
+|----------|-------------|
+| `"manual"` | Human operator reviewed and decided |
+| `"ai-mediator"` | AI-powered evaluation (e.g., [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator)) |
+| `"arbitration-panel"` | Multi-party arbitration panel |
+| `"dao-vote"` | On-chain governance vote |
+
+The `escrow.dispute_pending_mediation` event payload is identical to `escrow.disputed` (same `data` schema). Mediation services SHOULD fetch full escrow details via `GET /exchange/escrows/{escrow_id}` to obtain deliverables, acceptance criteria, and dispute reason before evaluating.
 
 ### 7.4. Deliverable Verification
 
@@ -1250,7 +1298,7 @@ sequenceDiagram
     Exchange-->>Client: 200 {status: "released"}
 ```
 
-### 11.4. Dispute Resolution
+### 11.4. Dispute Resolution (Manual)
 
 ```mermaid
 sequenceDiagram
@@ -1270,11 +1318,38 @@ sequenceDiagram
     Client->>Exchange: POST /exchange/dispute {escrow_id, reason: "Incomplete results"}
     Exchange-->>Client: 200 {status: "disputed"}
     Note over Exchange: Webhook: escrow.disputed
+    Note over Exchange: Webhook: escrow.dispute_pending_mediation
 
     Note over Operator: Reviews dispute out-of-band<br/>(logs, artifacts, communication)
 
-    Operator->>Exchange: POST /exchange/resolve {escrow_id, resolution: "refund"}
+    Operator->>Exchange: POST /exchange/resolve {escrow_id, resolution: "refund", strategy: "manual"}
     Exchange-->>Operator: 200 {status: "refunded", amount_returned}
+
+    Note over Exchange: Reputation updated (-)
+    Note over Exchange: Webhook: escrow.resolved
+```
+
+### 11.5. Dispute Resolution (AI Mediator)
+
+```mermaid
+sequenceDiagram
+    participant Client as Client Agent
+    participant Provider as Provider Agent
+    participant Exchange as Settlement Exchange
+    participant Mediator as AI Mediator
+
+    Client->>Exchange: POST /exchange/dispute {escrow_id, reason: "Incomplete results"}
+    Exchange-->>Client: 200 {status: "disputed"}
+    Note over Exchange: Webhook: escrow.disputed
+    Exchange->>Mediator: Webhook: escrow.dispute_pending_mediation
+
+    Mediator->>Exchange: GET /exchange/escrows/{escrow_id}
+    Exchange-->>Mediator: 200 {deliverables, dispute_reason, ...}
+
+    Note over Mediator: Evaluates evidence via LLM<br/>confidence = 0.92
+
+    Mediator->>Exchange: POST /exchange/resolve {escrow_id, resolution: "refund", strategy: "ai-mediator"}
+    Exchange-->>Mediator: 200 {status: "refunded"}
 
     Note over Exchange: Reputation updated (-)
     Note over Exchange: Webhook: escrow.resolved
@@ -1338,6 +1413,13 @@ A2A-SE can use AP2 as an upstream negotiation layer: AP2 negotiates the payment 
 ---
 
 ## 13. Changelog
+
+### v0.8.1 (2026-02-19)
+
+- Added pluggable resolution strategies for dispute mediation (Section 7.3.1).
+- Added optional `strategy` field on `POST /exchange/resolve` to record how a verdict was reached (Section 4.10).
+- Added `escrow.dispute_pending_mediation` webhook event, fired after `escrow.disputed` to notify external mediation services (Section 4.11).
+- Added AI mediator sequence diagram (Section 11.5).
 
 ### v0.8.0 (2026-02-18)
 

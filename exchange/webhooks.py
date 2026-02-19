@@ -24,6 +24,7 @@ ALL_EVENTS = [
     "escrow.refunded",
     "escrow.expired",
     "escrow.disputed",
+    "escrow.dispute_pending_mediation",
     "escrow.resolved",
 ]
 

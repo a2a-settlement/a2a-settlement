@@ -169,6 +169,81 @@ def test_resolve_to_refund(exchange_app, auth_header, monkeypatch):
         assert bal["held_in_escrow"] == 0
 
 
+def test_resolve_with_strategy(exchange_app, auth_header, monkeypatch):
+    with TestClient(exchange_app) as client:
+        escrow, requester_key, provider_key, provider_id = _setup_escrow(client, auth_header)
+
+        client.post(
+            "/v1/exchange/dispute",
+            headers=auth_header(requester_key),
+            json={"escrow_id": escrow["escrow_id"], "reason": "test"},
+        )
+
+        from exchange.config import get_session
+        from exchange.models import Account
+
+        session_gen = get_session()
+        session = next(session_gen)
+        with session.begin():
+            from sqlalchemy import select
+            acct = session.execute(select(Account).where(Account.bot_name == "RequesterBot")).scalar_one()
+            acct.status = "operator"
+            session.add(acct)
+        session.close()
+
+        resp = client.post(
+            "/v1/exchange/resolve",
+            headers=auth_header(requester_key),
+            json={"escrow_id": escrow["escrow_id"], "resolution": "release", "strategy": "ai-mediator"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["resolution"] == "release"
+        assert body["status"] == "released"
+
+        detail = client.get(
+            f"/v1/exchange/escrows/{escrow['escrow_id']}",
+            headers=auth_header(requester_key),
+        ).json()
+        assert detail["resolution_strategy"] == "ai-mediator"
+
+
+def test_resolve_without_strategy_is_null(exchange_app, auth_header, monkeypatch):
+    with TestClient(exchange_app) as client:
+        escrow, requester_key, _provider_key, _provider_id = _setup_escrow(client, auth_header)
+
+        client.post(
+            "/v1/exchange/dispute",
+            headers=auth_header(requester_key),
+            json={"escrow_id": escrow["escrow_id"], "reason": "test"},
+        )
+
+        from exchange.config import get_session
+        from exchange.models import Account
+
+        session_gen = get_session()
+        session = next(session_gen)
+        with session.begin():
+            from sqlalchemy import select
+            acct = session.execute(select(Account).where(Account.bot_name == "RequesterBot")).scalar_one()
+            acct.status = "operator"
+            session.add(acct)
+        session.close()
+
+        resp = client.post(
+            "/v1/exchange/resolve",
+            headers=auth_header(requester_key),
+            json={"escrow_id": escrow["escrow_id"], "resolution": "refund"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        detail = client.get(
+            f"/v1/exchange/escrows/{escrow['escrow_id']}",
+            headers=auth_header(requester_key),
+        ).json()
+        assert detail["resolution_strategy"] is None
+
+
 def test_resolve_requires_operator(exchange_app, auth_header):
     with TestClient(exchange_app) as client:
         escrow, requester_key, _provider_key, _provider_id = _setup_escrow(client, auth_header)
