@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import math
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_CEILING, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func as sa_func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from exchange.auth import authenticate_bot
@@ -34,6 +35,7 @@ from exchange.schemas import (
     TransactionItem,
     TransactionsResponse,
 )
+from exchange.tasks import expire_stale_escrows as _expire_stale_escrows
 from exchange.webhooks import fire_webhook_event
 
 
@@ -45,14 +47,15 @@ def _now() -> datetime:
 
 
 def _fee_amount(amount: int) -> int:
-    pct_fee = math.ceil(amount * (settings.fee_percent / 100.0))
-    return int(max(pct_fee, settings.min_fee))
+    pct = Decimal(str(settings.fee_percent)) / Decimal("100")
+    fee = (Decimal(amount) * pct).to_integral_value(rounding=ROUND_CEILING)
+    return int(max(fee, settings.min_fee))
 
 
 def _effective_fee_percent(amount: int, fee: int) -> float:
     if amount <= 0:
         return 0.0
-    return round(fee / amount * 100.0, 4)
+    return float((Decimal(fee) / Decimal(amount) * Decimal("100")).quantize(Decimal("0.0001")))
 
 
 def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
@@ -119,35 +122,34 @@ def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
             _auto_refund_dependents(session, dep.id)
 
 
-def _expire_stale_escrows(session: Session) -> int:
-    now = _now()
-    stale = session.execute(_lock(select(Escrow).where(and_(Escrow.status == "held", Escrow.expires_at < now)))).scalars().all()
-    expired_count = 0
-    for escrow in stale:
-        total_held = int(escrow.amount + escrow.fee_amount)
-        bal = session.execute(_lock(select(Balance).where(Balance.account_id == escrow.requester_id))).scalar_one_or_none()
-        if bal is None:
-            continue
-        bal.available += total_held
-        bal.held_in_escrow -= total_held
-        session.add(bal)
+def _check_daily_spend_limit(session: Session, account_id: str, new_hold: int) -> None:
+    """Raise 400 if the new hold would exceed the account's daily spending limit."""
+    acct = session.execute(
+        select(Account).where(Account.id == account_id)
+    ).scalar_one_or_none()
+    if acct is None:
+        return
 
-        escrow.status = "expired"
-        escrow.resolved_at = now
-        session.add(escrow)
+    limit = acct.daily_spend_limit
+    if limit is None or limit <= 0:
+        return
 
-        session.add(
-            Transaction(
-                escrow_id=escrow.id,
-                from_account=None,
-                to_account=escrow.requester_id,
-                amount=total_held,
-                tx_type="escrow_refund",
-                description="Auto-expired: TTL exceeded",
+    today_start = _now().replace(hour=0, minute=0, second=0, microsecond=0)
+    spent_today = session.execute(
+        select(sa_func.coalesce(sa_func.sum(Transaction.amount), 0)).where(
+            and_(
+                Transaction.from_account == account_id,
+                Transaction.tx_type == "escrow_hold",
+                Transaction.created_at >= today_start,
             )
         )
-        expired_count += 1
-    return expired_count
+    ).scalar_one()
+
+    if int(spent_today) + new_hold > limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Daily spend limit exceeded. Limit: {limit}, spent today: {spent_today}, requested: {new_hold}",
+        )
 
 
 @router.post("/exchange/deposit", status_code=201, response_model=DepositResponse, tags=["Settlement"])
@@ -218,6 +220,8 @@ def create_escrow(
                 detail=f"Insufficient balance. Need {total_hold} ({req.amount} + {fee_amount} fee), have {bal.available}",
             )
 
+        _check_daily_spend_limit(session, current["id"], total_hold)
+
         provider = session.execute(select(Account).where(Account.id == req.provider_id)).scalar_one_or_none()
         if provider is None:
             raise HTTPException(status_code=404, detail="Provider account not found")
@@ -256,7 +260,25 @@ def create_escrow(
             expires_at=expires_at,
         )
         session.add(escrow)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            existing = session.execute(
+                select(Escrow).where(
+                    and_(
+                        Escrow.requester_id == current["id"],
+                        Escrow.provider_id == req.provider_id,
+                        Escrow.task_id == req.task_id,
+                        Escrow.status == "held",
+                    )
+                )
+            ).scalar_one_or_none()
+            eid = existing.id if existing else "unknown"
+            raise HTTPException(
+                status_code=409,
+                detail=f"An active escrow already exists for this task_id (escrow_id={eid})",
+            )
 
         session.add(
             Transaction(
@@ -668,8 +690,6 @@ def list_escrows(
         if status is not None:
             stmt = stmt.where(Escrow.status == status)
 
-        from sqlalchemy import func as sa_func
-
         count = session.execute(
             select(sa_func.count()).select_from(stmt.subquery())
         ).scalar_one()
@@ -714,6 +734,8 @@ def batch_create_escrow(
                 status_code=400,
                 detail=f"Insufficient balance for batch. Need {total_needed}, have {bal.available}",
             )
+
+        _check_daily_spend_limit(session, current["id"], total_needed)
 
         created_escrows: list[Escrow] = []
         for idx, item in enumerate(req.escrows):

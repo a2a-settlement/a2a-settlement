@@ -50,6 +50,10 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
         if existing is not None:
             raise HTTPException(status_code=409, detail="A bot with this name already exists")
 
+        spend_limit = req.daily_spend_limit
+        if spend_limit is None and settings.default_daily_spend_limit > 0:
+            spend_limit = settings.default_daily_spend_limit
+
         account = Account(
             bot_name=req.bot_name,
             developer_id=req.developer_id,
@@ -58,6 +62,7 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
             api_key_hash=api_key_hash,
             description=req.description,
             skills=req.skills or [],
+            daily_spend_limit=spend_limit,
         )
         session.add(account)
         session.flush()
@@ -84,6 +89,7 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
             skills=account.skills,
             status=account.status,
             reputation=float(account.reputation),
+            daily_spend_limit=account.daily_spend_limit,
             created_at=account.created_at,
         ),
         api_key=api_key,
@@ -123,6 +129,7 @@ def directory(
                 skills=b.skills,
                 status=b.status,
                 reputation=float(b.reputation),
+                daily_spend_limit=b.daily_spend_limit,
                 created_at=b.created_at,
             )
             for b in bots
@@ -147,6 +154,7 @@ def get_account(account_id: str, session: Session = Depends(get_session)) -> Acc
             skills=acct.skills,
             status=acct.status,
             reputation=float(acct.reputation),
+            daily_spend_limit=acct.daily_spend_limit,
             created_at=acct.created_at,
         )
 

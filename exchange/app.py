@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -11,13 +12,22 @@ from exchange.middleware import IdempotencyMiddleware, RequestIdMiddleware
 from exchange.models import Base
 from exchange.routes import accounts, settlement, stats, webhooks
 from exchange.schemas import HealthResponse
+from exchange.tasks import background_expiry_loop
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.auto_create_schema:
         Base.metadata.create_all(bind=engine)
-    yield
+    task = asyncio.create_task(background_expiry_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:

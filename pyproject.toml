@@ -14,6 +14,7 @@ dependencies = []
 exchange = [
   "fastapi>=0.110",
   "uvicorn>=0.23",
+  "gunicorn>=21.2",
   "sqlalchemy>=2.0",
   "bcrypt>=4.0",
   "httpx>=0.27",

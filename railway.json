@@ -5,7 +5,7 @@
     "dockerfilePath": "./Dockerfile"
   },
   "deploy": {
-    "startCommand": "python -m exchange",
+    "startCommand": "gunicorn exchange.app:app -k uvicorn.workers.UvicornWorker --workers ${A2A_EXCHANGE_WORKERS:-4} --timeout ${A2A_EXCHANGE_WORKER_TIMEOUT:-120} --bind 0.0.0.0:${A2A_EXCHANGE_PORT:-3000}",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 5,
     "restartPolicyType": "ON_FAILURE",

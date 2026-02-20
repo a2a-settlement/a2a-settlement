@@ -37,12 +37,15 @@ class Settings:
     max_escrow: int = _get_int("A2A_EXCHANGE_MAX_ESCROW", 10_000)
     min_fee: int = _get_int("A2A_EXCHANGE_MIN_FEE", 1)
     default_ttl_minutes: int = _get_int("A2A_EXCHANGE_DEFAULT_TTL_MINUTES", 30)
+    default_daily_spend_limit: int = _get_int("A2A_EXCHANGE_DEFAULT_DAILY_SPEND_LIMIT", 0)
     api_key_salt_rounds: int = _get_int("A2A_EXCHANGE_API_KEY_SALT_ROUNDS", 10)
 
     auto_create_schema: bool = _get_bool("A2A_EXCHANGE_AUTO_CREATE_SCHEMA", True)
 
     host: str = os.getenv("A2A_EXCHANGE_HOST", "127.0.0.1")
     port: int = _get_int("A2A_EXCHANGE_PORT", 3000)
+    workers: int = _get_int("A2A_EXCHANGE_WORKERS", 4)
+    worker_timeout: int = _get_int("A2A_EXCHANGE_WORKER_TIMEOUT", 120)
 
     # Rate limiting
     rate_limit_authenticated: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT", "60/minute")
@@ -53,8 +56,15 @@ class Settings:
     # Invite code (empty = open registration)
     invite_code: str = os.getenv("A2A_EXCHANGE_INVITE_CODE", "")
 
+    # Request signatures
+    require_signatures: bool = _get_bool("A2A_EXCHANGE_REQUIRE_SIGNATURES", False)
+    signature_max_age_seconds: int = _get_int("A2A_EXCHANGE_SIGNATURE_MAX_AGE", 300)
+
     # Key rotation grace period
     key_rotation_grace_minutes: int = _get_int("A2A_EXCHANGE_KEY_ROTATION_GRACE_MINUTES", 5)
+
+    # Background expiry
+    expiry_interval_seconds: int = _get_int("A2A_EXCHANGE_EXPIRY_INTERVAL_SECONDS", 60)
 
     # Webhooks
     webhook_timeout_seconds: int = _get_int("A2A_EXCHANGE_WEBHOOK_TIMEOUT", 10)

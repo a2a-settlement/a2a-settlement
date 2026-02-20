@@ -30,6 +30,7 @@ class RegisterRequest(BaseModel):
     description: str | None = None
     skills: list[str] | None = None
     invite_code: str | None = None
+    daily_spend_limit: int | None = None
 
 
 class RegisterAccountInfo(BaseModel):
@@ -42,6 +43,7 @@ class RegisterAccountInfo(BaseModel):
     skills: list[str] = []
     status: str = "active"
     reputation: float = 0.5
+    daily_spend_limit: int | None = None
     created_at: datetime | None = None
 
 
@@ -62,6 +64,7 @@ class AccountResponse(BaseModel):
     skills: list[str] = []
     status: str
     reputation: float
+    daily_spend_limit: int | None = None
     created_at: datetime | None = None
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import math
+from decimal import ROUND_CEILING, Decimal
 from typing import Any
 
 
@@ -30,12 +30,14 @@ def compute_price_tokens(
         unit_size = int(pricing_entry.get("unitSize", 1000))
         if unit_size <= 0:
             raise PricingError("pricing.unitSize must be > 0")
-        return int(math.ceil((units / unit_size) * base_tokens))
+        result = (Decimal(units) / Decimal(unit_size) * Decimal(base_tokens)).to_integral_value(rounding=ROUND_CEILING)
+        return int(result)
 
     if model == "per-minute":
         if minutes is None:
             raise PricingError("minutes is required for per-minute pricing")
-        return int(math.ceil(float(minutes) * base_tokens))
+        result = (Decimal(str(minutes)) * Decimal(base_tokens)).to_integral_value(rounding=ROUND_CEILING)
+        return int(result)
 
     if model == "negotiable":
         raise PricingError("negotiable pricing requires an out-of-band negotiation step")

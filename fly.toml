@@ -5,12 +5,17 @@ primary_region = "iad"
 
 [build]
 
+[processes]
+  app = "gunicorn exchange.app:app -k uvicorn.workers.UvicornWorker --workers 4 --timeout 120 --bind 0.0.0.0:3000"
+
 [env]
   A2A_EXCHANGE_HOST = "0.0.0.0"
   A2A_EXCHANGE_PORT = "3000"
   A2A_EXCHANGE_AUTO_CREATE_SCHEMA = "true"
   A2A_EXCHANGE_FEE_PERCENT = "0.25"
   A2A_EXCHANGE_STARTER_TOKENS = "100"
+  A2A_EXCHANGE_WORKERS = "4"
+  A2A_EXCHANGE_WORKER_TIMEOUT = "120"
 
 [http_service]
   internal_port = 3000

@@ -1,4 +1,4 @@
-export { SettlementExchangeClient } from "./client.js";
+export { SettlementExchangeClient, signRequest } from "./client.js";
 export type { ClientOptions } from "./client.js";
 
 export {

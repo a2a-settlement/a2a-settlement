@@ -12,7 +12,7 @@ COPY sdk/ ./sdk/
 
 RUN pip install --no-cache-dir -e "./sdk" && \
     pip install --no-cache-dir -e ".[exchange]" && \
-    pip install --no-cache-dir psycopg2-binary httpx
+    pip install --no-cache-dir psycopg2-binary httpx gunicorn
 
 FROM python:3.12-slim
 
@@ -34,4 +34,8 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
-CMD ["python", "-m", "exchange"]
+CMD ["gunicorn", "exchange.app:app", \
+     "-k", "uvicorn.workers.UvicornWorker", \
+     "--workers", "4", \
+     "--timeout", "120", \
+     "--bind", "0.0.0.0:3000"]

@@ -34,10 +34,51 @@ function randomRequestId(): string {
   return `req_${hex}`;
 }
 
+async function hmacSha256(key: string, message: Uint8Array): Promise<string> {
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", cryptoKey, message);
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Produce X-A2A-Signature and X-A2A-Timestamp headers for request signing.
+ */
+export async function signRequest(
+  apiKey: string,
+  method: string,
+  path: string,
+  body?: Uint8Array | string,
+): Promise<Record<string, string>> {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const enc = new TextEncoder();
+  const prefix = enc.encode(`${timestamp}${method.toUpperCase()}${path}`);
+  const bodyBytes =
+    body instanceof Uint8Array
+      ? body
+      : body
+        ? enc.encode(body)
+        : new Uint8Array(0);
+  const message = new Uint8Array(prefix.length + bodyBytes.length);
+  message.set(prefix, 0);
+  message.set(bodyBytes, prefix.length);
+  const sig = await hmacSha256(apiKey, message);
+  return { "X-A2A-Signature": sig, "X-A2A-Timestamp": timestamp };
+}
+
 export interface ClientOptions {
   baseUrl: string;
   apiKey?: string;
   timeoutMs?: number;
+  signRequests?: boolean;
 }
 
 /**
@@ -48,14 +89,21 @@ export class SettlementExchangeClient {
   private baseUrl: string;
   private apiKey?: string;
   private timeoutMs: number;
+  private signReqs: boolean;
 
   constructor(options: ClientOptions) {
     this.baseUrl = options.baseUrl;
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.signReqs = options.signRequests ?? false;
   }
 
-  private headers(idempotencyKey?: string): Record<string, string> {
+  private async headers(
+    method: string,
+    path: string,
+    idempotencyKey?: string,
+    body?: string,
+  ): Promise<Record<string, string>> {
     const h: Record<string, string> = {
       "Content-Type": "application/json",
       "X-Request-Id": randomRequestId(),
@@ -65,6 +113,10 @@ export class SettlementExchangeClient {
     }
     if (idempotencyKey) {
       h["Idempotency-Key"] = idempotencyKey;
+    }
+    if (this.signReqs && this.apiKey) {
+      const sigHeaders = await signRequest(this.apiKey, method, path, body);
+      Object.assign(h, sigHeaders);
     }
     return h;
   }
@@ -81,14 +133,15 @@ export class SettlementExchangeClient {
       url += `?${qs.toString()}`;
     }
 
+    const bodyStr = body ? JSON.stringify(body) : undefined;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
       const resp = await fetch(url, {
         method,
-        headers: this.headers(options?.idempotencyKey),
-        body: body ? JSON.stringify(body) : undefined,
+        headers: await this.headers(method, path, options?.idempotencyKey, bodyStr),
+        body: bodyStr,
         signal: controller.signal,
       });
 
