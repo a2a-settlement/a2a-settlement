@@ -65,6 +65,13 @@ class Settings:
 
     # Background expiry
     expiry_interval_seconds: int = _get_int("A2A_EXCHANGE_EXPIRY_INTERVAL_SECONDS", 60)
+    dispute_ttl_minutes: int = _get_int("A2A_EXCHANGE_DISPUTE_TTL_MINUTES", 60)
+    expiry_warning_minutes: int = _get_int("A2A_EXCHANGE_EXPIRY_WARNING_MINUTES", 5)
+
+    # Spending guard
+    spending_window_hours: int = _get_int("A2A_EXCHANGE_SPENDING_WINDOW_HOURS", 24)
+    hourly_velocity_limit: int = _get_int("A2A_EXCHANGE_HOURLY_VELOCITY_LIMIT", 0)
+    spending_freeze_minutes: int = _get_int("A2A_EXCHANGE_SPENDING_FREEZE_MINUTES", 30)
 
     # Webhooks
     webhook_timeout_seconds: int = _get_int("A2A_EXCHANGE_WEBHOOK_TIMEOUT", 10)

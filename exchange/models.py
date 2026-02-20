@@ -31,6 +31,7 @@ class Account(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
     reputation: Mapped[float] = mapped_column(nullable=False, default=0.5)
     daily_spend_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
+    frozen_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -77,6 +78,8 @@ class Escrow(Base):
     dispute_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution_strategy: Mapped[str | None] = mapped_column(String(100), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    dispute_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    warning_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

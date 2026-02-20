@@ -35,8 +35,15 @@ from exchange.schemas import (
     TransactionItem,
     TransactionsResponse,
 )
+from exchange.spending_guard import SpendingLimitGuard
 from exchange.tasks import expire_stale_escrows as _expire_stale_escrows
 from exchange.webhooks import fire_webhook_event
+
+_spending_guard = SpendingLimitGuard(
+    spending_window_hours=settings.spending_window_hours,
+    hourly_velocity_limit=settings.hourly_velocity_limit,
+    spending_freeze_minutes=settings.spending_freeze_minutes,
+)
 
 
 router = APIRouter()
@@ -122,34 +129,9 @@ def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
             _auto_refund_dependents(session, dep.id)
 
 
-def _check_daily_spend_limit(session: Session, account_id: str, new_hold: int) -> None:
-    """Raise 400 if the new hold would exceed the account's daily spending limit."""
-    acct = session.execute(
-        select(Account).where(Account.id == account_id)
-    ).scalar_one_or_none()
-    if acct is None:
-        return
-
-    limit = acct.daily_spend_limit
-    if limit is None or limit <= 0:
-        return
-
-    today_start = _now().replace(hour=0, minute=0, second=0, microsecond=0)
-    spent_today = session.execute(
-        select(sa_func.coalesce(sa_func.sum(Transaction.amount), 0)).where(
-            and_(
-                Transaction.from_account == account_id,
-                Transaction.tx_type == "escrow_hold",
-                Transaction.created_at >= today_start,
-            )
-        )
-    ).scalar_one()
-
-    if int(spent_today) + new_hold > limit:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Daily spend limit exceeded. Limit: {limit}, spent today: {spent_today}, requested: {new_hold}",
-        )
+def _check_spending_limits(session: Session, account_id: str, new_hold: int) -> None:
+    """Enforce rolling-window spending limits and hourly velocity via the guard."""
+    _spending_guard.check(session, account_id, new_hold)
 
 
 @router.post("/exchange/deposit", status_code=201, response_model=DepositResponse, tags=["Settlement"])
@@ -220,7 +202,7 @@ def create_escrow(
                 detail=f"Insufficient balance. Need {total_hold} ({req.amount} + {fee_amount} fee), have {bal.available}",
             )
 
-        _check_daily_spend_limit(session, current["id"], total_hold)
+        _check_spending_limits(session, current["id"], total_hold)
 
         provider = session.execute(select(Account).where(Account.id == req.provider_id)).scalar_one_or_none()
         if provider is None:
@@ -470,6 +452,7 @@ def dispute(
 
         escrow.status = "disputed"
         escrow.dispute_reason = req.reason
+        escrow.dispute_expires_at = _now() + timedelta(minutes=settings.dispute_ttl_minutes)
         session.add(escrow)
 
     fire_webhook_event(session, escrow, "escrow.disputed")
@@ -735,7 +718,7 @@ def batch_create_escrow(
                 detail=f"Insufficient balance for batch. Need {total_needed}, have {bal.available}",
             )
 
-        _check_daily_spend_limit(session, current["id"], total_needed)
+        _check_spending_limits(session, current["id"], total_needed)
 
         created_escrows: list[Escrow] = []
         for idx, item in enumerate(req.escrows):

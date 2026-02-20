@@ -2,92 +2,51 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from exchange.config import SessionLocal, settings
-from exchange.models import Balance, Escrow, Transaction
+from exchange.models import Escrow
+from exchange.observers import PaymentTimeoutObserver
 from exchange.webhooks import fire_webhook_event
 
 logger = logging.getLogger(__name__)
 
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _lock(stmt):
-    return stmt.with_for_update()
+_observer = PaymentTimeoutObserver(
+    dispute_ttl_minutes=settings.dispute_ttl_minutes,
+    expiry_warning_minutes=settings.expiry_warning_minutes,
+)
 
 
 def expire_stale_escrows(session: Session) -> int:
-    """Expire held escrows past their TTL, refunding tokens to the requester.
+    """Backward-compatible wrapper: expire held escrows past their TTL.
 
-    Returns the number of escrows expired.
+    Returns the number of escrows expired (held only, not disputes).
     """
-    now = _now()
-    stale = (
-        session.execute(
-            _lock(
-                select(Escrow).where(
-                    and_(Escrow.status == "held", Escrow.expires_at < now)
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    expired_count = 0
-    for escrow in stale:
-        total_held = int(escrow.amount + escrow.fee_amount)
-        bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
-        ).scalar_one_or_none()
-        if bal is None:
-            continue
-        bal.available += total_held
-        bal.held_in_escrow -= total_held
-        session.add(bal)
-
-        escrow.status = "expired"
-        escrow.resolved_at = now
-        session.add(escrow)
-
-        session.add(
-            Transaction(
-                escrow_id=escrow.id,
-                from_account=None,
-                to_account=escrow.requester_id,
-                amount=total_held,
-                tx_type="escrow_refund",
-                description="Auto-expired: TTL exceeded",
-            )
-        )
-        expired_count += 1
-    return expired_count
+    expired = _observer.expire_stale_held(session)
+    return len(expired)
 
 
-def run_expiry_sweep() -> int:
-    """Run a single expiry sweep in its own session, firing webhooks for each."""
+def run_expiry_sweep() -> dict:
+    """Run a full sweep in its own session, firing webhooks for each event."""
     session = SessionLocal()
     try:
         with session.begin():
-            expired = expire_stale_escrows(session)
-            if expired:
-                expired_rows = (
-                    session.execute(
-                        select(Escrow).where(Escrow.status == "expired")
-                        .order_by(Escrow.resolved_at.desc())
-                        .limit(expired)
-                    )
-                    .scalars()
-                    .all()
-                )
-                for escrow in expired_rows:
-                    fire_webhook_event(session, escrow, "escrow.expired")
-        return expired
+            results = _observer.sweep(session)
+
+        for escrow in results["expired_held"]:
+            fire_webhook_event(session, escrow, "escrow.expired")
+        for escrow in results["expired_disputes"]:
+            fire_webhook_event(session, escrow, "escrow.expired")
+        for escrow in results["warned"]:
+            fire_webhook_event(session, escrow, "escrow.expiring_soon")
+
+        return {
+            "expired_held": len(results["expired_held"]),
+            "expired_disputes": len(results["expired_disputes"]),
+            "warned": len(results["warned"]),
+        }
     finally:
         session.close()
 
@@ -99,8 +58,16 @@ async def background_expiry_loop() -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            count = run_expiry_sweep()
-            if count:
-                logger.info("Background sweep expired %d escrow(s)", count)
+            counts = run_expiry_sweep()
+            total_expired = counts["expired_held"] + counts["expired_disputes"]
+            if total_expired:
+                logger.info(
+                    "Background sweep expired %d escrow(s) (held=%d, disputed=%d)",
+                    total_expired,
+                    counts["expired_held"],
+                    counts["expired_disputes"],
+                )
+            if counts["warned"]:
+                logger.info("Background sweep sent %d expiry warning(s)", counts["warned"])
         except Exception:
             logger.exception("Error in background expiry sweep")

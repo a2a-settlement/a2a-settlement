@@ -23,9 +23,11 @@ ALL_EVENTS = [
     "escrow.released",
     "escrow.refunded",
     "escrow.expired",
+    "escrow.expiring_soon",
     "escrow.disputed",
     "escrow.dispute_pending_mediation",
     "escrow.resolved",
+    "account.spending_limit_breached",
 ]
 
 RETRY_BACKOFF = [5, 25, 125]
@@ -76,10 +78,8 @@ def _build_escrow_payload(escrow: Escrow, event: str) -> dict:
     }
 
 
-def fire_webhook_event(session: Session, escrow: Escrow, event: str) -> None:
-    """Fire a webhook event for both requester and provider if they have webhooks configured."""
-    account_ids = [escrow.requester_id, escrow.provider_id]
-
+def _fire_for_accounts(account_ids: list[str], event: str, payload: dict) -> None:
+    """Deliver a webhook event to all matching accounts."""
     db = SessionLocal()
     try:
         with db.begin():
@@ -94,7 +94,6 @@ def fire_webhook_event(session: Session, escrow: Escrow, event: str) -> None:
                 .all()
             )
 
-        payload = _build_escrow_payload(escrow, event)
         for cfg in configs:
             if cfg.events and event not in cfg.events:
                 continue
@@ -102,3 +101,20 @@ def fire_webhook_event(session: Session, escrow: Escrow, event: str) -> None:
             thread.start()
     finally:
         db.close()
+
+
+def fire_webhook_event(session: Session, escrow: Escrow, event: str) -> None:
+    """Fire a webhook event for both requester and provider if they have webhooks configured."""
+    account_ids = [escrow.requester_id, escrow.provider_id]
+    payload = _build_escrow_payload(escrow, event)
+    _fire_for_accounts(account_ids, event, payload)
+
+
+def fire_account_webhook_event(account_id: str, event: str, data: dict) -> None:
+    """Fire a webhook event for a single account (non-escrow events)."""
+    payload = {
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data": data,
+    }
+    _fire_for_accounts([account_id], event, payload)

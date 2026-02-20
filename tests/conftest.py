@@ -24,12 +24,18 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     import exchange.config as config_mod
     import exchange.ratelimit as ratelimit_mod
+    import exchange.observers as observers_mod
+    import exchange.spending_guard as spending_guard_mod
+    import exchange.tasks as tasks_mod
     import exchange.routes.accounts as accounts_mod
     import exchange.routes.settlement as settlement_mod
     import exchange.app as app_mod
 
     importlib.reload(config_mod)
     importlib.reload(ratelimit_mod)
+    importlib.reload(observers_mod)
+    importlib.reload(spending_guard_mod)
+    importlib.reload(tasks_mod)
     importlib.reload(accounts_mod)
     importlib.reload(settlement_mod)
     importlib.reload(app_mod)
