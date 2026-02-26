@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,10 @@ from exchange.models import Account, Balance, Transaction
 from exchange.ratelimit import check_register_rate_limit
 from exchange.schemas import (
     AccountResponse,
+    AgentCardResponse,
     DirectoryResponse,
+    KYARegisterResponse,
+    KYAVerificationDetail,
     RegisterAccountInfo,
     RegisterRequest,
     RegisterResponse,
@@ -22,7 +26,29 @@ from exchange.schemas import (
     SuspendResponse,
     UpdateSkillsRequest,
     UpdateSkillsResponse,
+    VerificationStatusResponse,
 )
+from exchange.identity.did_resolver import DIDResolver
+from exchange.identity.issuer_registry import IssuerRegistry
+from exchange.identity.models import AgentCardModel
+from exchange.identity.vc_verifier import VCVerifier
+
+
+_did_resolver: DIDResolver | None = None
+_issuer_registry = IssuerRegistry()
+
+
+def get_vc_verifier(session: Session = Depends(get_session)) -> VCVerifier:
+    """Build a VCVerifier using the shared DID resolver and current trusted issuers."""
+    global _did_resolver
+    if _did_resolver is None:
+        _did_resolver = DIDResolver(
+            cache_ttl_seconds=settings.kya_did_cache_ttl_seconds,
+            http_timeout=settings.kya_did_http_timeout_seconds,
+        )
+    with session.begin():
+        trusted = _issuer_registry.get_active_dids(session)
+    return VCVerifier(_did_resolver, trusted)
 
 
 router = APIRouter()
@@ -219,3 +245,210 @@ def suspend_account(
         session.add(acct)
 
     return SuspendResponse(account_id=acct.id, reason=req.reason)
+
+
+# ---------------------------------------------------------------------------
+# KYA Agent Card Registration
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/accounts/register-agent",
+    status_code=201,
+    response_model=KYARegisterResponse,
+    tags=["Accounts"],
+    dependencies=[Depends(check_register_rate_limit)],
+)
+def register_agent(
+    card_body: dict,
+    session: Session = Depends(get_session),
+    verifier: VCVerifier = Depends(get_vc_verifier),
+) -> KYARegisterResponse:
+    """Register an agent with a KYA-enhanced Agent Card.
+
+    Accepts raw JSON so signature verification uses the exact bytes the
+    agent signed, avoiding datetime re-serialization mismatches.
+    """
+    try:
+        card = AgentCardModel.model_validate(card_body)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if settings.invite_code:
+        raise HTTPException(status_code=403, detail="Invite code required; use /accounts/register for legacy flow")
+
+    api_key = f"ate_{secrets.token_hex(16)}"
+    api_key_hash = bcrypt.hashpw(
+        api_key.encode("utf-8"),
+        bcrypt.gensalt(rounds=settings.api_key_salt_rounds),
+    ).decode("utf-8")
+
+    card_dict = card_body
+
+    vr = verifier.verify_agent_card(card_dict)
+
+    if card.kya_level >= 1 and not vr.card_signature_valid:
+        raise HTTPException(status_code=401, detail=vr.error_summary or "Card signature verification failed")
+
+    if card.kya_level >= 2 and vr.kya_level_verified < 2:
+        pass  # warning only; we store verified level
+
+    att_expires: datetime | None = None
+    if card.attestations:
+        future_expiries = [a.expires_at for a in card.attestations if a.expires_at > datetime.now(timezone.utc)]
+        if future_expiries:
+            att_expires = min(future_expiries)
+
+    with session.begin():
+        existing = session.execute(select(Account.id).where(Account.bot_name == card.name)).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="A bot with this name already exists")
+
+        if card.kya_level >= 1 and card.id:
+            dup_did = session.execute(select(Account.id).where(Account.did == card.id)).scalar_one_or_none()
+            if dup_did is not None:
+                raise HTTPException(status_code=409, detail="An agent with this DID is already registered")
+
+        spend_limit = settings.default_daily_spend_limit if settings.default_daily_spend_limit > 0 else None
+
+        account = Account(
+            bot_name=card.name,
+            developer_id=card.id,
+            developer_name=card.name,
+            contact_email="",
+            api_key_hash=api_key_hash,
+            description=card.description,
+            skills=card.capabilities.skills if card.capabilities else [],
+            daily_spend_limit=spend_limit,
+            kya_level_verified=vr.kya_level_verified,
+            did=card.id if card.kya_level >= 1 else None,
+            agent_card_json=card_dict,
+            card_verified_at=datetime.now(timezone.utc),
+            attestation_expires_at=att_expires,
+        )
+        session.add(account)
+        session.flush()
+
+        session.add(Balance(account_id=account.id, available=settings.starter_tokens))
+        session.add(
+            Transaction(
+                from_account=None,
+                to_account=account.id,
+                amount=settings.starter_tokens,
+                tx_type="mint",
+                description="Starter token allocation on KYA registration",
+            )
+        )
+
+    cred_details = [
+        KYAVerificationDetail(
+            credential_claim=cr.credential_claim,
+            issuer_did=cr.issuer_did,
+            status=cr.status.value,
+        )
+        for cr in vr.credential_results
+    ]
+
+    return KYARegisterResponse(
+        account=RegisterAccountInfo(
+            id=account.id,
+            bot_name=account.bot_name,
+            developer_id=account.developer_id,
+            developer_name=account.developer_name,
+            contact_email=account.contact_email,
+            description=account.description,
+            skills=account.skills,
+            status=account.status,
+            reputation=float(account.reputation),
+            daily_spend_limit=account.daily_spend_limit,
+            created_at=account.created_at,
+        ),
+        api_key=api_key,
+        starter_tokens=settings.starter_tokens,
+        kya_level_claimed=vr.kya_level_claimed,
+        kya_level_verified=vr.kya_level_verified,
+        card_signature_valid=vr.card_signature_valid,
+        did_resolved=vr.did_resolved,
+        credential_results=cred_details,
+        error_summary=vr.error_summary,
+    )
+
+
+@router.get("/accounts/{account_id}/card", response_model=AgentCardResponse, tags=["Accounts"])
+def get_agent_card(account_id: str, session: Session = Depends(get_session)) -> AgentCardResponse:
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if acct.agent_card_json is None:
+            raise HTTPException(status_code=404, detail="No Agent Card stored for this account")
+        return AgentCardResponse(
+            agent_id=acct.id,
+            kya_level_verified=acct.kya_level_verified,
+            card=acct.agent_card_json,
+        )
+
+
+@router.put("/accounts/{account_id}/card", response_model=AgentCardResponse, tags=["Accounts"])
+def update_agent_card(
+    account_id: str,
+    card_body: dict,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+    verifier: VCVerifier = Depends(get_vc_verifier),
+) -> AgentCardResponse:
+    if current["id"] != account_id:
+        raise HTTPException(status_code=403, detail="Can only update your own Agent Card")
+
+    try:
+        card = AgentCardModel.model_validate(card_body)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    card_dict = card_body
+    vr = verifier.verify_agent_card(card_dict)
+
+    att_expires: datetime | None = None
+    if card.attestations:
+        future_expiries = [a.expires_at for a in card.attestations if a.expires_at > datetime.now(timezone.utc)]
+        if future_expiries:
+            att_expires = min(future_expiries)
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        acct.agent_card_json = card_dict
+        acct.kya_level_verified = vr.kya_level_verified
+        acct.card_verified_at = datetime.now(timezone.utc)
+        acct.attestation_expires_at = att_expires
+        if card.kya_level >= 1:
+            acct.did = card.id
+        session.add(acct)
+
+    return AgentCardResponse(
+        agent_id=acct.id,
+        kya_level_verified=acct.kya_level_verified,
+        card=acct.agent_card_json,
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/verification",
+    response_model=VerificationStatusResponse,
+    tags=["Accounts"],
+)
+def get_verification_status(
+    account_id: str, session: Session = Depends(get_session)
+) -> VerificationStatusResponse:
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return VerificationStatusResponse(
+            agent_id=acct.id,
+            kya_level_verified=acct.kya_level_verified,
+            did=acct.did,
+            card_verified_at=acct.card_verified_at,
+            attestation_expires_at=acct.attestation_expires_at,
+        )

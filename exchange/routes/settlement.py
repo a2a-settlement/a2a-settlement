@@ -134,6 +134,63 @@ def _check_spending_limits(session: Session, account_id: str, new_hold: int) -> 
     _spending_guard.check(session, account_id, new_hold)
 
 
+def _check_kya_gate(
+    session: Session,
+    requester_id: str,
+    provider_id: str,
+    amount: int,
+) -> dict:
+    """Check if both agents meet KYA requirements for the transaction amount.
+
+    Returns a dict with gate decision and metadata.  When ``kya_enabled`` is
+    ``False`` (default), always allows the transaction.
+    """
+    if not settings.kya_enabled:
+        return {
+            "allowed": True,
+            "required_level": 0,
+            "requester_level": 0,
+            "provider_level": 0,
+            "hitl_required": False,
+            "requester_did": None,
+            "provider_did": None,
+            "rejection_reason": None,
+        }
+
+    requester = session.execute(select(Account).where(Account.id == requester_id)).scalar_one_or_none()
+    provider = session.execute(select(Account).where(Account.id == provider_id)).scalar_one_or_none()
+
+    req_level = requester.kya_level_verified if requester else 0
+    prov_level = provider.kya_level_verified if provider else 0
+    min_level = min(req_level, prov_level)
+
+    if amount > settings.kya_escrow_tier2_max:
+        required = 2
+    elif amount > settings.kya_escrow_tier1_max:
+        required = 1
+    else:
+        required = 0
+
+    hitl = amount >= settings.kya_hitl_threshold and required >= 2
+    allowed = min_level >= required
+
+    return {
+        "allowed": allowed,
+        "required_level": required,
+        "requester_level": req_level,
+        "provider_level": prov_level,
+        "hitl_required": hitl,
+        "requester_did": getattr(requester, "did", None),
+        "provider_did": getattr(provider, "did", None),
+        "rejection_reason": (
+            f"KYA level {required} required (amount={amount}), "
+            f"but requester={req_level}, provider={prov_level}"
+            if not allowed
+            else None
+        ),
+    }
+
+
 @router.post("/exchange/deposit", status_code=201, response_model=DepositResponse, tags=["Settlement"])
 def deposit(
     req: DepositRequest,
@@ -210,6 +267,10 @@ def create_escrow(
         if provider.status != "active":
             raise HTTPException(status_code=400, detail="Provider account is not active")
 
+        kya_gate = _check_kya_gate(session, current["id"], req.provider_id, req.amount)
+        if not kya_gate["allowed"]:
+            raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
+
         bal.available -= total_hold
         bal.held_in_escrow += total_hold
         session.add(bal)
@@ -240,6 +301,10 @@ def create_escrow(
             deliverables=deliverables_json,
             status="held",
             expires_at=expires_at,
+            requester_did=kya_gate["requester_did"],
+            provider_did=kya_gate["provider_did"],
+            kya_level_at_creation=kya_gate["required_level"],
+            hitl_required=kya_gate["hitl_required"],
         )
         session.add(escrow)
         try:
@@ -733,6 +798,10 @@ def batch_create_escrow(
             if provider.status != "active":
                 raise HTTPException(status_code=400, detail=f"Provider account is not active: {item.provider_id}")
 
+            kya_gate = _check_kya_gate(session, current["id"], item.provider_id, item.amount)
+            if not kya_gate["allowed"]:
+                raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
+
             resolved_deps: list[str] | None = None
             if item.depends_on:
                 resolved_deps = []
@@ -762,6 +831,10 @@ def batch_create_escrow(
                 deliverables=deliverables_json,
                 status="held",
                 expires_at=expires_at,
+                requester_did=kya_gate["requester_did"],
+                provider_did=kya_gate["provider_did"],
+                kya_level_at_creation=kya_gate["required_level"],
+                hitl_required=kya_gate["hitl_required"],
             )
             session.add(escrow)
             session.flush()

@@ -10,11 +10,13 @@ from __future__ import annotations
 
 __all__ = [
     "A2A_SE_EXTENSION_URI",
+    "AgentCardBuilder",
     "SettlementExchangeClient",
     "sign_request",
 ]
 
 from a2a_settlement.client import SettlementExchangeClient, sign_request
+from a2a_settlement.identity import AgentCardBuilder
 
 A2A_SE_EXTENSION_URI = "https://a2a-settlement.org/extensions/settlement/v1"
 

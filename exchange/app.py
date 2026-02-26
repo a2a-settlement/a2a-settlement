@@ -10,30 +10,58 @@ from fastapi import APIRouter, FastAPI
 from exchange.config import engine, settings
 from exchange.middleware import IdempotencyMiddleware, RequestIdMiddleware
 from exchange.models import Base
-from exchange.routes import accounts, settlement, stats, webhooks
+from exchange.routes import accounts, kya_admin, settlement, stats, webhooks
 from exchange.schemas import HealthResponse
 from exchange.tasks import background_expiry_loop
+
+import exchange.identity.issuer_registry  # noqa: F401 — register TrustedIssuer with Base
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.auto_create_schema:
         Base.metadata.create_all(bind=engine)
-    task = asyncio.create_task(background_expiry_loop())
+
+    if settings.kya_enabled:
+        from exchange.identity.issuer_registry import IssuerRegistry
+        from exchange.config import get_session as _gs
+
+        gen = _gs()
+        s = next(gen)
+        try:
+            with s.begin():
+                IssuerRegistry().seed_initial(s)
+        finally:
+            try:
+                next(gen)
+            except StopIteration:
+                pass
+
+    tasks: list[asyncio.Task] = []
+    tasks.append(asyncio.create_task(background_expiry_loop()))
+
+    if settings.kya_enabled:
+        from exchange.identity.monitor import KYAMonitor
+
+        kya_monitor = KYAMonitor()
+        tasks.append(asyncio.create_task(kya_monitor.run()))
+
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for t in tasks:
+            t.cancel()
+        for t in tasks:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="A2A Settlement Exchange",
-        version="0.8.1",
+        version="0.9.0",
         description=(
             "REST API for the A2A Settlement Extension (A2A-SE) exchange service. "
             "Provides escrow-based token settlement for the Agent2Agent protocol."
@@ -63,6 +91,7 @@ def create_app() -> FastAPI:
     api_router.include_router(settlement.router)
     api_router.include_router(stats.router)
     api_router.include_router(webhooks.router)
+    api_router.include_router(kya_admin.router)
 
     app.include_router(api_router, prefix="/v1")
     app.include_router(api_router, prefix="/api/v1")

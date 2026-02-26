@@ -40,6 +40,13 @@ class Account(Base):
         onupdate=func.now(),
     )
 
+    # KYA identity fields
+    kya_level_verified: Mapped[int] = mapped_column(nullable=False, default=0)
+    did: Mapped[str | None] = mapped_column(String(500), nullable=True, unique=True, index=True)
+    agent_card_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    card_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attestation_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     balance: Mapped["Balance"] = relationship(back_populates="account", uselist=False, cascade="all, delete-orphan")
 
 
@@ -82,6 +89,14 @@ class Escrow(Base):
     warning_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # KYA escrow fields
+    requester_did: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    provider_did: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    kya_level_at_creation: Mapped[int | None] = mapped_column(nullable=True)
+    hitl_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    hitl_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    hitl_approval_vc: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         Index(

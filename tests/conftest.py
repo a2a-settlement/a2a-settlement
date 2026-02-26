@@ -27,8 +27,11 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import exchange.observers as observers_mod
     import exchange.spending_guard as spending_guard_mod
     import exchange.tasks as tasks_mod
+    import exchange.webhooks as webhooks_mod
     import exchange.routes.accounts as accounts_mod
     import exchange.routes.settlement as settlement_mod
+    import exchange.routes.webhooks as webhooks_routes_mod
+    import exchange.routes.kya_admin as kya_admin_mod
     import exchange.app as app_mod
 
     importlib.reload(config_mod)
@@ -36,8 +39,11 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(observers_mod)
     importlib.reload(spending_guard_mod)
     importlib.reload(tasks_mod)
+    importlib.reload(webhooks_mod)
     importlib.reload(accounts_mod)
     importlib.reload(settlement_mod)
+    importlib.reload(webhooks_routes_mod)
+    importlib.reload(kya_admin_mod)
     importlib.reload(app_mod)
 
     return app_mod.create_app()

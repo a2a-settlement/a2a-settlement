@@ -335,10 +335,46 @@ class StatsResponse(BaseModel):
     active_escrows: int
 
 
+# --- KYA ---
+
+
+class KYAVerificationDetail(BaseModel):
+    credential_claim: str | None = None
+    issuer_did: str | None = None
+    status: str
+
+
+class KYARegisterResponse(BaseModel):
+    message: str = "Agent registered with KYA verification."
+    account: RegisterAccountInfo
+    api_key: str
+    starter_tokens: int
+    kya_level_claimed: int
+    kya_level_verified: int
+    card_signature_valid: bool = False
+    did_resolved: bool = False
+    credential_results: list[KYAVerificationDetail] = []
+    error_summary: str | None = None
+
+
+class AgentCardResponse(BaseModel):
+    agent_id: str
+    kya_level_verified: int
+    card: dict
+
+
+class VerificationStatusResponse(BaseModel):
+    agent_id: str
+    kya_level_verified: int
+    did: str | None = None
+    card_verified_at: datetime | None = None
+    attestation_expires_at: datetime | None = None
+
+
 # --- Health ---
 
 
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "a2a-settlement-exchange"
-    version: str = "0.8.1"
+    version: str = "0.9.0"

@@ -77,6 +77,19 @@ class Settings:
     webhook_timeout_seconds: int = _get_int("A2A_EXCHANGE_WEBHOOK_TIMEOUT", 10)
     webhook_max_retries: int = _get_int("A2A_EXCHANGE_WEBHOOK_MAX_RETRIES", 3)
 
+    # KYA
+    kya_enabled: bool = _get_bool("A2A_EXCHANGE_KYA_ENABLED", False)
+    kya_did_cache_ttl_seconds: int = _get_int("A2A_EXCHANGE_KYA_DID_CACHE_TTL", 300)
+    kya_did_http_timeout_seconds: int = _get_int("A2A_EXCHANGE_KYA_DID_HTTP_TIMEOUT", 10)
+    kya_monitor_interval_seconds: int = _get_int("A2A_EXCHANGE_KYA_MONITOR_INTERVAL", 60)
+    kya_expiry_warning_days: int = _get_int("A2A_EXCHANGE_KYA_EXPIRY_WARNING_DAYS", 7)
+    kya_did_recheck_hours: int = _get_int("A2A_EXCHANGE_KYA_DID_RECHECK_HOURS", 24)
+    kya_escrow_tier1_max: int = _get_int("A2A_EXCHANGE_KYA_ESCROW_TIER1_MAX", 100)
+    kya_escrow_tier2_max: int = _get_int("A2A_EXCHANGE_KYA_ESCROW_TIER2_MAX", 10_000)
+    kya_hitl_threshold: int = _get_int("A2A_EXCHANGE_KYA_HITL_THRESHOLD", 10_000)
+    kya_operator_did: str = os.getenv("A2A_EXCHANGE_KYA_OPERATOR_DID", "did:web:exchange.a2a-settlement.org")
+    kya_operator_private_key_path: str = os.getenv("A2A_EXCHANGE_KYA_OPERATOR_KEY_PATH", "")
+
 
 settings = Settings()
 
