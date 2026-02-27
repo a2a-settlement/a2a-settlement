@@ -158,6 +158,20 @@ class SettlementExchangeClient:
 
     # --- Settlement ---
 
+    def deposit(
+        self,
+        *,
+        amount: int,
+        currency: str = "ATE",
+        reference: str | None = None,
+    ) -> dict[str, Any]:
+        """Add funds to the authenticated account."""
+        url = _join(self.base_url, "/v1/exchange/deposit")
+        payload: dict[str, Any] = {"amount": amount, "currency": currency}
+        if reference is not None:
+            payload["reference"] = reference
+        return self._post(url, payload)
+
     def create_escrow(
         self,
         *,
