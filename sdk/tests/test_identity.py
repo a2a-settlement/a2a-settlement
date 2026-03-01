@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -124,10 +126,12 @@ class TestAgentCardBuilder:
         assert card["policies"]["jurisdiction"] == "US"
 
     def test_sign_verify_roundtrip(self):
-        """The card signature can be verified with the exchange crypto module."""
-        from exchange.identity.crypto import canonicalize_json, generate_keypair, verify_ed25519_signature
+        """The card signature verifies using Ed25519-compatible canonical JSON."""
+        from nacl.signing import SigningKey, VerifyKey
 
-        priv, pub = generate_keypair()
+        signing_key = SigningKey.generate()
+        priv = bytes(signing_key)
+        pub = bytes(signing_key.verify_key)
         card = (
             AgentCardBuilder("roundtrip", "did:web:test.example")
             .set_kya_level(1)
@@ -138,5 +142,5 @@ class TestAgentCardBuilder:
         sig = card["metadata"]["card_signature"]["proof_value"]
         card_no_sig = dict(card)
         card_no_sig["metadata"] = {k: v for k, v in card["metadata"].items() if k != "card_signature"}
-        msg = canonicalize_json(card_no_sig)
-        assert verify_ed25519_signature(msg, sig, pub)
+        msg = json.dumps(card_no_sig, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        VerifyKey(pub).verify(msg, base64.b64decode(sig))
