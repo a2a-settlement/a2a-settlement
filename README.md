@@ -105,6 +105,12 @@ pip install -e ".[exchange,examples,dev]"
 pytest -q
 ```
 
+## Ecosystem
+
+| Project | Description |
+|---------|-------------|
+| [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) | OAuth 2.0 settlement scopes for agent economic authorization — spending limits, counterparty policies, and delegation chains |
+
 ## License
 
 MIT. See `LICENSE`.
