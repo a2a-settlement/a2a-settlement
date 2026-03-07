@@ -74,7 +74,7 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
         fabrication_detected = session.execute(
             select(func.count(Escrow.id)).where(
                 Escrow.provenance_result.isnot(None),
-                func.json_extract(Escrow.provenance_result, "$.verified") == False,  # noqa: E712
+                Escrow.provenance_result["verified"].as_boolean() == False,  # noqa: E712
             )
         ).scalar_one()
 
