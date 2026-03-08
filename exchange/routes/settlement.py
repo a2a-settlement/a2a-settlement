@@ -4,13 +4,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_CEILING, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import and_, func as sa_func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from exchange.auth import authenticate_bot
 from exchange.config import get_session, settings
+from exchange.ratelimit import limiter
 from exchange.models import Account, Balance, Escrow, Transaction
 from exchange.schemas import (
     BalanceResponse,
@@ -26,6 +27,8 @@ from exchange.schemas import (
     EscrowListResponse,
     EscrowRequest,
     EscrowResponse,
+    PartialReleaseRequest,
+    PartialReleaseResponse,
     RefundRequest,
     RefundResponse,
     ReleaseRequest,
@@ -99,6 +102,13 @@ def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
         provenance=escrow.provenance,
         provenance_result=escrow.provenance_result,
         delivered_at=escrow.delivered_at,
+        released_amount=int(escrow.released_amount) if escrow.released_amount else None,
+        released_fee=int(escrow.released_fee) if escrow.released_fee else None,
+        holdback_amount=int(escrow.holdback_amount) if escrow.holdback_amount else None,
+        holdback_fee=int(escrow.holdback_fee) if escrow.holdback_fee else None,
+        score=escrow.score,
+        efficacy_check_at=escrow.efficacy_check_at,
+        efficacy_criteria=escrow.efficacy_criteria,
         created_at=escrow.created_at,
         resolved_at=escrow.resolved_at,
     )
@@ -238,13 +248,10 @@ def _check_kya_gate(
     }
 
 
-@router.post(
-    "/exchange/deposit",
-    status_code=201,
-    response_model=DepositResponse,
-    tags=["Settlement"],
-)
+@router.post("/exchange/deposit", status_code=201, response_model=DepositResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def deposit(
+    request: Request,
     req: DepositRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -285,13 +292,10 @@ def deposit(
     )
 
 
-@router.post(
-    "/exchange/escrow",
-    status_code=201,
-    response_model=EscrowResponse,
-    tags=["Settlement"],
-)
+@router.post("/exchange/escrow", status_code=201, response_model=EscrowResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def create_escrow(
+    request: Request,
     req: EscrowRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -504,8 +508,151 @@ def deliver(
     )
 
 
+@router.post(
+    "/exchange/escrow/{escrow_id}/partial-release",
+    status_code=200,
+    response_model=PartialReleaseResponse,
+    tags=["Settlement"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def partial_release(
+    request: Request,
+    escrow_id: str,
+    req: PartialReleaseRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> PartialReleaseResponse:
+    with session.begin():
+        _expire_stale_escrows(session)
+
+        escrow = session.execute(
+            _lock(select(Escrow).where(Escrow.id == escrow_id))
+        ).scalar_one_or_none()
+        if escrow is None:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        if escrow.requester_id != current["id"]:
+            raise HTTPException(
+                status_code=403, detail="Only the requester can partially release"
+            )
+        if escrow.status != "held":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Escrow cannot be partially released (status: {escrow.status})",
+            )
+
+        pct = req.release_percent
+        release_amount = int(escrow.amount) * pct // 100
+        release_fee = int(escrow.fee_amount) * pct // 100
+        holdback_amount = int(escrow.amount) - release_amount
+        holdback_fee = int(escrow.fee_amount) - release_fee
+        release_total = release_amount + release_fee
+
+        requester_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
+        ).scalar_one_or_none()
+        provider_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == escrow.provider_id))
+        ).scalar_one_or_none()
+        if requester_bal is None or provider_bal is None:
+            raise HTTPException(status_code=404, detail="Balance not found")
+
+        requester_bal.held_in_escrow -= release_total
+        requester_bal.total_spent += release_total
+        provider_bal.available += release_amount
+        provider_bal.total_earned += release_amount
+        session.add(requester_bal)
+        session.add(provider_bal)
+
+        escrow.released_amount = release_amount
+        escrow.released_fee = release_fee
+        escrow.holdback_amount = holdback_amount
+        escrow.holdback_fee = holdback_fee
+        escrow.score = req.score
+
+        session.add(
+            Transaction(
+                escrow_id=escrow.id,
+                from_account=escrow.requester_id,
+                to_account=escrow.provider_id,
+                amount=release_amount,
+                tx_type="escrow_partial_release",
+                description=f"Partial release ({pct}%) - score {req.score or 'n/a'}",
+            )
+        )
+        if release_fee > 0:
+            session.add(
+                Transaction(
+                    escrow_id=escrow.id,
+                    from_account=escrow.requester_id,
+                    to_account=None,
+                    amount=release_fee,
+                    tx_type="fee",
+                    description=f"Partial release fee ({pct}%)",
+                )
+            )
+
+        if req.efficacy_check_at:
+            escrow.status = "partially_released"
+            escrow.efficacy_check_at = req.efficacy_check_at
+            escrow.efficacy_criteria = req.efficacy_criteria
+        else:
+            holdback_total = holdback_amount + holdback_fee
+            requester_bal.available += holdback_total
+            requester_bal.held_in_escrow -= holdback_total
+            session.add(requester_bal)
+
+            session.add(
+                Transaction(
+                    escrow_id=escrow.id,
+                    from_account=None,
+                    to_account=escrow.requester_id,
+                    amount=holdback_total,
+                    tx_type="escrow_holdback_refund",
+                    description=f"Holdback refunded ({100 - pct}%) - no efficacy review",
+                )
+            )
+
+            escrow.status = "released"
+            escrow.resolved_at = _now()
+
+        session.add(escrow)
+
+        provider = session.execute(
+            select(Account).where(Account.id == escrow.provider_id)
+        ).scalar_one_or_none()
+        if provider is not None:
+            boost = (pct / 100.0) * 0.1
+            provider.reputation = min(
+                1.0, float(provider.reputation) * (1.0 - boost) + 1.0 * boost
+            )
+            session.add(provider)
+
+    fire_webhook_event(session, escrow, "escrow.partial_release")
+    log_settlement_event(
+        escrow_id=escrow.id,
+        event_type="escrow.partial_release",
+        requester_id=escrow.requester_id,
+        provider_id=escrow.provider_id,
+        amount=release_amount,
+        status=escrow.status,
+    )
+
+    return PartialReleaseResponse(
+        escrow_id=escrow.id,
+        status=escrow.status,
+        released_amount=release_amount,
+        fee_collected=release_fee,
+        holdback_amount=holdback_amount if escrow.status == "partially_released" else 0,
+        holdback_fee=holdback_fee if escrow.status == "partially_released" else 0,
+        provider_id=escrow.provider_id,
+        efficacy_check_at=escrow.efficacy_check_at,
+    )
+
+
 @router.post("/exchange/release", response_model=ReleaseResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def release(
+    request: Request,
     req: ReleaseRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -522,12 +669,14 @@ def release(
             raise HTTPException(
                 status_code=403, detail="Only the requester can release an escrow"
             )
-        if escrow.status != "held":
+        if escrow.status not in ("held", "partially_released"):
             raise HTTPException(
                 status_code=400, detail=f"Escrow is already {escrow.status}"
             )
 
-        if escrow.depends_on:
+        is_holdback = escrow.status == "partially_released"
+
+        if not is_holdback and escrow.depends_on:
             unresolved = (
                 session.execute(
                     select(Escrow).where(
@@ -547,7 +696,13 @@ def release(
                     detail=f"Cannot release: upstream escrows not yet released: {ids}",
                 )
 
-        total_held = int(escrow.amount + escrow.fee_amount)
+        if is_holdback:
+            pay_amount = int(escrow.holdback_amount or 0)
+            pay_fee = int(escrow.holdback_fee or 0)
+        else:
+            pay_amount = int(escrow.amount)
+            pay_fee = int(escrow.fee_amount)
+        total_held = pay_amount + pay_fee
 
         requester_bal = session.execute(
             _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
@@ -562,33 +717,39 @@ def release(
         requester_bal.total_spent += total_held
         session.add(requester_bal)
 
-        provider_bal.available += int(escrow.amount)
-        provider_bal.total_earned += int(escrow.amount)
+        provider_bal.available += pay_amount
+        provider_bal.total_earned += pay_amount
         session.add(provider_bal)
 
         escrow.status = "released"
         escrow.resolved_at = _now()
+        if is_holdback:
+            escrow.holdback_amount = 0
+            escrow.holdback_fee = 0
         session.add(escrow)
+
+        tx_type = "escrow_holdback_release" if is_holdback else "escrow_release"
+        tx_desc = "Holdback released - efficacy approved" if is_holdback else "Task completed - payment released"
 
         session.add(
             Transaction(
                 escrow_id=escrow.id,
                 from_account=escrow.requester_id,
                 to_account=escrow.provider_id,
-                amount=int(escrow.amount),
-                tx_type="escrow_release",
-                description="Task completed - payment released",
+                amount=pay_amount,
+                tx_type=tx_type,
+                description=tx_desc,
             )
         )
-        if escrow.fee_amount > 0:
+        if pay_fee > 0:
             session.add(
                 Transaction(
                     escrow_id=escrow.id,
                     from_account=escrow.requester_id,
                     to_account=None,
-                    amount=int(escrow.fee_amount),
+                    amount=pay_fee,
                     tx_type="fee",
-                    description="Platform transaction fee",
+                    description="Platform transaction fee" + (" (holdback)" if is_holdback else ""),
                 )
             )
 
@@ -605,21 +766,23 @@ def release(
         event_type="escrow.released",
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
-        amount=int(escrow.amount),
+        amount=pay_amount,
         status="released",
     )
 
     return ReleaseResponse(
         escrow_id=req.escrow_id,
         status="released",
-        amount_paid=int(escrow.amount),
-        fee_collected=int(escrow.fee_amount),
+        amount_paid=pay_amount,
+        fee_collected=pay_fee,
         provider_id=escrow.provider_id,
     )
 
 
 @router.post("/exchange/refund", response_model=RefundResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def refund(
+    request: Request,
     req: RefundRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -636,12 +799,17 @@ def refund(
             raise HTTPException(
                 status_code=403, detail="Only the requester can refund an escrow"
             )
-        if escrow.status != "held":
+        if escrow.status not in ("held", "partially_released"):
             raise HTTPException(
                 status_code=400, detail=f"Escrow is already {escrow.status}"
             )
 
-        total_held = int(escrow.amount + escrow.fee_amount)
+        is_holdback = escrow.status == "partially_released"
+
+        if is_holdback:
+            refund_total = int(escrow.holdback_amount or 0) + int(escrow.holdback_fee or 0)
+        else:
+            refund_total = int(escrow.amount + escrow.fee_amount)
 
         requester_bal = session.execute(
             _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
@@ -649,22 +817,32 @@ def refund(
         if requester_bal is None:
             raise HTTPException(status_code=404, detail="Requester balance not found")
 
-        requester_bal.available += total_held
-        requester_bal.held_in_escrow -= total_held
+        requester_bal.available += refund_total
+        requester_bal.held_in_escrow -= refund_total
         session.add(requester_bal)
 
-        escrow.status = "refunded"
+        if is_holdback:
+            escrow.status = "released"
+            escrow.holdback_amount = 0
+            escrow.holdback_fee = 0
+        else:
+            escrow.status = "refunded"
         escrow.resolved_at = _now()
         session.add(escrow)
+
+        tx_type = "escrow_holdback_refund" if is_holdback else "escrow_refund"
+        tx_desc = (
+            req.reason or ("Holdback refunded - efficacy not met" if is_holdback else "Task failed or cancelled")
+        )
 
         session.add(
             Transaction(
                 escrow_id=escrow.id,
                 from_account=None,
                 to_account=escrow.requester_id,
-                amount=total_held,
-                tx_type="escrow_refund",
-                description=req.reason or "Task failed or cancelled",
+                amount=refund_total,
+                tx_type=tx_type,
+                description=tx_desc,
             )
         )
 
@@ -675,28 +853,32 @@ def refund(
             provider.reputation = max(0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1)
             session.add(provider)
 
-        _auto_refund_dependents(session, escrow.id)
+        if not is_holdback:
+            _auto_refund_dependents(session, escrow.id)
 
-    fire_webhook_event(session, escrow, "escrow.refunded")
+    event_type = "escrow.released" if is_holdback else "escrow.refunded"
+    fire_webhook_event(session, escrow, event_type)
     log_settlement_event(
         escrow_id=req.escrow_id,
-        event_type="escrow.refunded",
+        event_type=event_type,
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
-        amount=int(escrow.amount),
-        status="refunded",
+        amount=refund_total,
+        status=escrow.status,
     )
 
     return RefundResponse(
         escrow_id=req.escrow_id,
-        status="refunded",
-        amount_returned=total_held,
+        status=escrow.status,
+        amount_returned=refund_total,
         requester_id=escrow.requester_id,
     )
 
 
 @router.post("/exchange/dispute", response_model=DisputeResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def dispute(
+    request: Request,
     req: DisputeRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -745,7 +927,9 @@ def dispute(
 
 
 @router.post("/exchange/resolve", tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def resolve(
+    request: Request,
     req: ResolveRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -895,7 +1079,9 @@ def resolve(
 
 
 @router.get("/exchange/balance", response_model=BalanceResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def balance(
+    request: Request,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> BalanceResponse:
@@ -920,10 +1106,10 @@ def balance(
         )
 
 
-@router.get(
-    "/exchange/transactions", response_model=TransactionsResponse, tags=["Settlement"]
-)
+@router.get("/exchange/transactions", response_model=TransactionsResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def transactions(
+    request: Request,
     limit: int = 50,
     offset: int = 0,
     current: dict = Depends(authenticate_bot),
@@ -963,12 +1149,10 @@ def transactions(
     )
 
 
-@router.get(
-    "/exchange/escrows/{escrow_id}",
-    response_model=EscrowDetailResponse,
-    tags=["Settlement"],
-)
+@router.get("/exchange/escrows/{escrow_id}", response_model=EscrowDetailResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def get_escrow(
+    request: Request,
     escrow_id: str,
     _current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -983,7 +1167,9 @@ def get_escrow(
 
 
 @router.get("/exchange/escrows", response_model=EscrowListResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def list_escrows(
+    request: Request,
     task_id: str | None = None,
     group_id: str | None = None,
     status: str | None = None,
@@ -1024,13 +1210,10 @@ def list_escrows(
     )
 
 
-@router.post(
-    "/exchange/escrow/batch",
-    status_code=201,
-    response_model=BatchEscrowResponse,
-    tags=["Settlement"],
-)
+@router.post("/exchange/escrow/batch", status_code=201, response_model=BatchEscrowResponse, tags=["Settlement"])
+@limiter.limit(settings.rate_limit_authenticated)
 def batch_create_escrow(
+    request: Request,
     req: BatchEscrowRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),

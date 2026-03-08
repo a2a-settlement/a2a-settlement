@@ -6,10 +6,17 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from exchange.config import engine, settings
 from exchange.middleware import IdempotencyMiddleware, RequestIdMiddleware
 from exchange.models import Base
+from exchange.ratelimit import limiter
 from exchange.routes import accounts, dashboard, kya_admin, settlement, stats, webhooks
 from exchange.schemas import HealthResponse
 from exchange.tasks import background_expiry_loop
@@ -79,6 +86,10 @@ def create_app() -> FastAPI:
         ],
     )
 
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
     app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(RequestIdMiddleware)
 
@@ -115,8 +126,22 @@ def create_app() -> FastAPI:
                 "A2A_EXCHANGE_SETTLEMENT_AUTH_ENABLED=true but a2a-settlement-auth is not installed"
             )
 
-    @app.get("/health", response_model=HealthResponse, tags=["Health"])
+    @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse, tags=["Health"])
+    @limiter.exempt
     def health() -> HealthResponse:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except Exception:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "service": "a2a-settlement-exchange",
+                    "version": "0.9.0",
+                    "database": "unreachable",
+                },
+            )
         return HealthResponse()
 
     api_router = APIRouter()

@@ -4,12 +4,13 @@ import secrets
 from datetime import datetime, timezone
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from exchange.auth import authenticate_bot
 from exchange.config import get_session, settings
+from exchange.ratelimit import limiter
 from exchange.models import Account, Balance, Transaction
 from exchange.ratelimit import check_register_rate_limit
 from exchange.schemas import (
@@ -186,7 +187,9 @@ def get_account(account_id: str, session: Session = Depends(get_session)) -> Acc
 
 
 @router.put("/accounts/skills", response_model=UpdateSkillsResponse, tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
 def update_skills(
+    request: Request,
     req: UpdateSkillsRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -201,7 +204,9 @@ def update_skills(
 
 
 @router.post("/accounts/rotate-key", response_model=RotateKeyResponse, tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
 def rotate_key(
+    request: Request,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> RotateKeyResponse:
@@ -227,7 +232,9 @@ def rotate_key(
 
 
 @router.post("/accounts/admin/suspend", response_model=SuspendResponse, tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
 def suspend_account(
+    request: Request,
     req: SuspendRequest,
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
@@ -390,7 +397,9 @@ def get_agent_card(account_id: str, session: Session = Depends(get_session)) -> 
 
 
 @router.put("/accounts/{account_id}/card", response_model=AgentCardResponse, tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
 def update_agent_card(
+    request: Request,
     account_id: str,
     card_body: dict,
     current: dict = Depends(authenticate_bot),

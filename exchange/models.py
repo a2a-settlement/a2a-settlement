@@ -157,6 +157,17 @@ class Escrow(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Partial release / holdback fields
+    released_amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    released_fee: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    holdback_amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    holdback_fee: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    score: Mapped[int | None] = mapped_column(nullable=True)
+    efficacy_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    efficacy_criteria: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # KYA escrow fields
     requester_did: Mapped[str | None] = mapped_column(String(500), nullable=True)
     provider_did: Mapped[str | None] = mapped_column(String(500), nullable=True)

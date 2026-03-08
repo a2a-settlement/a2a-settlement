@@ -113,6 +113,8 @@ def log_settlement_event(
 
 def get_tree_status() -> dict:
     """Return current Merkle tree status for the /stats endpoint."""
+    if not getattr(settings, "compliance_enabled", False):
+        return {"enabled": False}
     tree = _get_tree()
     if tree is None:
         return {"enabled": False}

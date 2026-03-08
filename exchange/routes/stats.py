@@ -71,10 +71,28 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
         total_verified = session.execute(
             select(func.count(Escrow.id)).where(Escrow.provenance_result.isnot(None))
         ).scalar_one()
+        from exchange.config import settings
+
+        if settings.database_url.startswith("sqlite"):
+            fab_filter = func.json_extract(Escrow.provenance_result, "$.verified") == False  # noqa: E712
+        else:
+            fab_filter = Escrow.provenance_result.op("->>")("verified") == "false"
         fabrication_detected = session.execute(
             select(func.count(Escrow.id)).where(
                 Escrow.provenance_result.isnot(None),
-                Escrow.provenance_result["verified"].as_boolean() == False,  # noqa: E712
+                fab_filter,
+            )
+        ).scalar_one()
+
+        partial_releases = session.execute(
+            select(func.count(Escrow.id)).where(Escrow.released_amount.isnot(None))
+        ).scalar_one()
+        now = datetime.now(timezone.utc)
+        pending_efficacy = session.execute(
+            select(func.count(Escrow.id)).where(
+                Escrow.status == "partially_released",
+                Escrow.efficacy_check_at.isnot(None),
+                Escrow.efficacy_check_at <= now,
             )
         ).scalar_one()
 
@@ -95,6 +113,8 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
         with_provenance=int(with_provenance),
         total_verified=int(total_verified),
         fabrication_detected=int(fabrication_detected),
+        partial_releases=int(partial_releases),
+        pending_efficacy_reviews=int(pending_efficacy),
     )
 
     return StatsResponse(

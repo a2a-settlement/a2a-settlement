@@ -243,6 +243,29 @@ class SettlementExchangeClient:
             payload["provenance"] = provenance
         return self._post(url, payload)
 
+    def partial_release(
+        self,
+        *,
+        escrow_id: str,
+        release_percent: int,
+        score: int | None = None,
+        efficacy_check_at: str | None = None,
+        efficacy_criteria: str | None = None,
+    ) -> dict[str, Any]:
+        """Partially release an escrow, optionally holding back remainder for efficacy review."""
+        url = _join(self.base_url, f"/v1/exchange/escrow/{escrow_id}/partial-release")
+        payload: dict[str, Any] = {
+            "escrow_id": escrow_id,
+            "release_percent": release_percent,
+        }
+        if score is not None:
+            payload["score"] = score
+        if efficacy_check_at is not None:
+            payload["efficacy_check_at"] = efficacy_check_at
+        if efficacy_criteria is not None:
+            payload["efficacy_criteria"] = efficacy_criteria
+        return self._post(url, payload)
+
     def release_escrow(
         self, *, escrow_id: str, idempotency_key: str | None = None
     ) -> dict[str, Any]:

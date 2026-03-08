@@ -216,6 +216,25 @@ class DeliverResponse(BaseModel):
     delivered_at: datetime
 
 
+class PartialReleaseRequest(BaseModel):
+    escrow_id: str
+    release_percent: int = Field(..., ge=1, le=99)
+    score: int | None = Field(None, ge=0, le=100)
+    efficacy_check_at: datetime | None = None
+    efficacy_criteria: str | None = None
+
+
+class PartialReleaseResponse(BaseModel):
+    escrow_id: str
+    status: str
+    released_amount: int
+    fee_collected: int
+    holdback_amount: int
+    holdback_fee: int
+    provider_id: str
+    efficacy_check_at: datetime | None = None
+
+
 class ResolveRequest(BaseModel):
     escrow_id: str
     resolution: str
@@ -287,6 +306,13 @@ class EscrowDetailResponse(BaseModel):
     provenance: dict | None = None
     provenance_result: dict | None = None
     delivered_at: datetime | None = None
+    released_amount: int | None = None
+    released_fee: int | None = None
+    holdback_amount: int | None = None
+    holdback_fee: int | None = None
+    score: int | None = None
+    efficacy_check_at: datetime | None = None
+    efficacy_criteria: str | None = None
     created_at: datetime | None = None
     resolved_at: datetime | None = None
 
@@ -377,6 +403,8 @@ class StatsProvenanceInfo(BaseModel):
     with_provenance: int = 0
     total_verified: int = 0
     fabrication_detected: int = 0
+    partial_releases: int = 0
+    pending_efficacy_reviews: int = 0
 
 
 class StatsResponse(BaseModel):
@@ -431,4 +459,5 @@ class VerificationStatusResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "a2a-settlement-exchange"
-    version: str = "0.9.0"
+    version: str = "1.0.0"
+    database: str = "ok"

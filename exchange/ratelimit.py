@@ -4,8 +4,28 @@ import threading
 import time
 
 from fastapi import HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from exchange.config import settings
+
+# ---------------------------------------------------------------------------
+# Global slowapi limiter (per-IP, in-memory)
+#
+# NOTE: with multiple Gunicorn workers each process holds its own counter,
+# so effective limits are ~workers × configured value.  For true shared
+# state, swap the storage to Redis via `storage_uri="redis://..."`.
+# ---------------------------------------------------------------------------
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[settings.rate_limit_public],
+    enabled=True,
+)
+
+# ---------------------------------------------------------------------------
+# Registration-specific rate limiter (stricter: 5/hour, 20/day per IP)
+# ---------------------------------------------------------------------------
 
 _lock = threading.Lock()
 _hits: dict[str, list[float]] = {}
