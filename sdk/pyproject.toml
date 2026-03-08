@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a2a-settlement"
-version = "0.9.0"
+version = "1.0.0"
 description = "Escrow-based payment settlement for the A2A protocol"
 readme = "README.md"
 license = "MIT"
