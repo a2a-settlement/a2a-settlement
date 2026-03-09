@@ -1217,6 +1217,13 @@ def get_escrow(
         ).scalar_one_or_none()
         if escrow is None:
             raise HTTPException(status_code=404, detail="Escrow not found")
+        is_party = _current["id"] in (escrow.requester_id, escrow.provider_id)
+        is_operator = _current.get("status") == "operator"
+        if not is_party and not is_operator:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the requester, provider, or operator can view this escrow",
+            )
         return _escrow_detail(escrow)
 
 
