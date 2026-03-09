@@ -156,6 +156,58 @@ def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
             _auto_refund_dependents(session, dep.id)
 
 
+def _verify_provenance(provenance_dict: dict | None, content: str, required_level: str | None) -> dict | None:
+    """Verify delivery provenance and return a result dict, or None if no provenance."""
+    if not provenance_dict:
+        return None
+
+    import hashlib
+
+    tier = provenance_dict.get("attestation_level", "self_declared")
+    source_refs = provenance_dict.get("source_refs", [])
+    signature = provenance_dict.get("signature")
+
+    checks: list[str] = []
+    verified = True
+
+    tier_order = {"self_declared": 0, "signed": 1, "verifiable": 2}
+    if required_level:
+        provided = tier_order.get(tier, 0)
+        required = tier_order.get(required_level, 0)
+        if provided >= required:
+            checks.append(f"attestation_level_met:{tier}>={required_level}")
+        else:
+            checks.append(f"attestation_level_insufficient:{tier}<{required_level}")
+            verified = False
+
+    if tier in ("signed", "verifiable") and not source_refs:
+        checks.append("source_refs_missing")
+        verified = False
+    elif source_refs:
+        checks.append(f"source_refs_present:{len(source_refs)}")
+
+    for ref in source_refs:
+        ref_hash = ref.get("content_hash")
+        if ref_hash:
+            actual = hashlib.sha256(content.encode()).hexdigest()
+            if ref_hash == actual:
+                checks.append("content_hash_match")
+            else:
+                checks.append("content_hash_mismatch")
+
+    if tier in ("signed", "verifiable") and not signature:
+        checks.append("signature_missing")
+    elif signature:
+        checks.append("signature_present")
+
+    return {
+        "verified": verified,
+        "tier": tier,
+        "checks": checks,
+        "recommendation": "approve" if verified else "review",
+    }
+
+
 def _apply_provenance_reputation_penalty(
     provider: Account, provenance_result: dict | None
 ) -> None:
@@ -485,8 +537,10 @@ def deliver(
 
         now = _now()
         escrow.delivered_content = req.content
-        escrow.provenance = (
-            req.provenance.model_dump(mode="json") if req.provenance else None
+        prov_dict = req.provenance.model_dump(mode="json") if req.provenance else None
+        escrow.provenance = prov_dict
+        escrow.provenance_result = _verify_provenance(
+            prov_dict, req.content, escrow.required_attestation_level
         )
         escrow.delivered_at = now
         session.add(escrow)
@@ -849,7 +903,7 @@ def refund(
         provider = session.execute(
             select(Account).where(Account.id == escrow.provider_id)
         ).scalar_one_or_none()
-        if provider is not None:
+        if provider is not None and escrow.delivered_at is not None:
             provider.reputation = max(0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1)
             session.add(provider)
 

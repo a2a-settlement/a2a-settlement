@@ -30,7 +30,7 @@ class MediationState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     escrow_id: str
-    escrow_status: Literal["held", "released", "refunded", "expired", "disputed"]
+    escrow_status: Literal["held", "released", "refunded", "expired", "disputed", "partially_released"]
     dispute_reason: str | None = None
     resolution_strategy: str | None = None
     mediator_id: str | None = None

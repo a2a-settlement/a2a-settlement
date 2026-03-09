@@ -87,12 +87,10 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
         partial_releases = session.execute(
             select(func.count(Escrow.id)).where(Escrow.released_amount.isnot(None))
         ).scalar_one()
-        now = datetime.now(timezone.utc)
         pending_efficacy = session.execute(
             select(func.count(Escrow.id)).where(
                 Escrow.status == "partially_released",
                 Escrow.efficacy_check_at.isnot(None),
-                Escrow.efficacy_check_at <= now,
             )
         ).scalar_one()
 
