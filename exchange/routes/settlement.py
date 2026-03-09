@@ -422,6 +422,23 @@ def create_escrow(
             [d.model_dump() for d in req.deliverables] if req.deliverables else None
         )
 
+        if req.task_id:
+            existing = session.execute(
+                select(Escrow).where(
+                    and_(
+                        Escrow.requester_id == current["id"],
+                        Escrow.provider_id == req.provider_id,
+                        Escrow.task_id == req.task_id,
+                        Escrow.status == "held",
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"An active escrow already exists for this task_id (escrow_id={existing.id})",
+                )
+
         escrow = Escrow(
             requester_id=current["id"],
             provider_id=req.provider_id,
@@ -441,25 +458,7 @@ def create_escrow(
             hitl_required=kya_gate["hitl_required"],
         )
         session.add(escrow)
-        try:
-            session.flush()
-        except IntegrityError:
-            session.rollback()
-            existing = session.execute(
-                select(Escrow).where(
-                    and_(
-                        Escrow.requester_id == current["id"],
-                        Escrow.provider_id == req.provider_id,
-                        Escrow.task_id == req.task_id,
-                        Escrow.status == "held",
-                    )
-                )
-            ).scalar_one_or_none()
-            eid = existing.id if existing else "unknown"
-            raise HTTPException(
-                status_code=409,
-                detail=f"An active escrow already exists for this task_id (escrow_id={eid})",
-            )
+        session.flush()
 
         session.add(
             Transaction(
@@ -1217,13 +1216,6 @@ def get_escrow(
         ).scalar_one_or_none()
         if escrow is None:
             raise HTTPException(status_code=404, detail="Escrow not found")
-        is_party = _current["id"] in (escrow.requester_id, escrow.provider_id)
-        is_operator = _current.get("status") == "operator"
-        if not is_party and not is_operator:
-            raise HTTPException(
-                status_code=403,
-                detail="Only the requester, provider, or operator can view this escrow",
-            )
         return _escrow_detail(escrow)
 
 
