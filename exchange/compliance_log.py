@@ -53,8 +53,15 @@ def log_settlement_event(
     status: str,
     dispute_reason: Optional[str] = None,
     resolution_strategy: Optional[str] = None,
+    grounding_chain: Optional[dict] = None,
 ) -> Optional[dict]:
     """Record a settlement event in the compliance Merkle tree.
+
+    Args:
+        grounding_chain: Optional web grounding summary to include in the
+            audit trail for ``escrow.delivered`` events.  Expected keys:
+            ``search_queries``, ``chunk_count``, ``coverage``,
+            ``source_uris``.
 
     Returns the proof dict on success, None if compliance is disabled.
     """
@@ -73,6 +80,15 @@ def log_settlement_event(
             PreDisputeAttestationPayload,
         )
 
+        extra_strategy = resolution_strategy
+        if grounding_chain and event_type == "escrow.delivered":
+            gc_summary = json.dumps(grounding_chain, separators=(",", ":"))
+            extra_strategy = (
+                f"{resolution_strategy}|grounding:{gc_summary}"
+                if resolution_strategy
+                else f"grounding:{gc_summary}"
+            )
+
         payload = PreDisputeAttestationPayload(
             header=AttestationHeader(
                 issuer_id="exchange",
@@ -86,7 +102,7 @@ def log_settlement_event(
                 escrow_id=escrow_id,
                 escrow_status=status,
                 dispute_reason=dispute_reason,
-                resolution_strategy=resolution_strategy,
+                resolution_strategy=extra_strategy,
             ),
         )
 

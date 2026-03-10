@@ -156,7 +156,9 @@ def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
             _auto_refund_dependents(session, dep.id)
 
 
-def _verify_provenance(provenance_dict: dict | None, content: str, required_level: str | None) -> dict | None:
+def _verify_provenance(
+    provenance_dict: dict | None, content: str, required_level: str | None
+) -> dict | None:
     """Verify delivery provenance and return a result dict, or None if no provenance."""
     if not provenance_dict:
         return None
@@ -200,12 +202,69 @@ def _verify_provenance(provenance_dict: dict | None, content: str, required_leve
     elif signature:
         checks.append("signature_present")
 
+    grounding = provenance_dict.get("grounding_metadata")
+    if grounding:
+        g_chunks = grounding.get("chunks") or []
+        g_supports = grounding.get("supports") or []
+        g_coverage = grounding.get("coverage")
+
+        if g_chunks:
+            checks.append(f"grounding_chunks_present:{len(g_chunks)}")
+        else:
+            checks.append("grounding_chunks_empty")
+
+        valid_indices = True
+        for sup in g_supports:
+            for idx in sup.get("chunk_indices", []):
+                if idx < 0 or idx >= len(g_chunks):
+                    valid_indices = False
+                    break
+        checks.append(f"grounding_supports_valid:{valid_indices}")
+
+        if g_coverage is not None:
+            checks.append(f"grounding_coverage:{g_coverage:.2f}")
+            if g_coverage > 0.5:
+                checks.append("grounding_sufficient")
+            else:
+                checks.append("grounding_insufficient")
+        elif g_supports and content:
+            text_len = len(content)
+            covered = bytearray(text_len)
+            for sup in g_supports:
+                seg = sup.get("segment", {})
+                s = max(0, min(seg.get("start_index", 0), text_len))
+                e = max(s, min(seg.get("end_index", 0), text_len))
+                for i in range(s, e):
+                    covered[i] = 1
+            computed = sum(covered) / text_len if text_len else 0.0
+            checks.append(f"grounding_coverage:{computed:.2f}")
+            if computed > 0.5:
+                checks.append("grounding_sufficient")
+            else:
+                checks.append("grounding_insufficient")
+
+        domains = {_extract_domain(c.get("uri", "")) for c in g_chunks if c.get("uri")}
+        if len(domains) >= 2:
+            checks.append(f"grounding_source_diversity:{len(domains)}")
+        elif domains:
+            checks.append("grounding_single_source")
+
     return {
         "verified": verified,
         "tier": tier,
         "checks": checks,
         "recommendation": "approve" if verified else "review",
     }
+
+
+def _extract_domain(uri: str) -> str:
+    """Extract the domain from a URI for source diversity checks."""
+    try:
+        from urllib.parse import urlparse
+
+        return urlparse(uri).netloc
+    except Exception:
+        return uri
 
 
 def _apply_provenance_reputation_penalty(
@@ -300,7 +359,12 @@ def _check_kya_gate(
     }
 
 
-@router.post("/exchange/deposit", status_code=201, response_model=DepositResponse, tags=["Settlement"])
+@router.post(
+    "/exchange/deposit",
+    status_code=201,
+    response_model=DepositResponse,
+    tags=["Settlement"],
+)
 @limiter.limit(settings.rate_limit_authenticated)
 def deposit(
     request: Request,
@@ -344,7 +408,12 @@ def deposit(
     )
 
 
-@router.post("/exchange/escrow", status_code=201, response_model=EscrowResponse, tags=["Settlement"])
+@router.post(
+    "/exchange/escrow",
+    status_code=201,
+    response_model=EscrowResponse,
+    tags=["Settlement"],
+)
 @limiter.limit(settings.rate_limit_authenticated)
 def create_escrow(
     request: Request,
@@ -544,6 +613,16 @@ def deliver(
         escrow.delivered_at = now
         session.add(escrow)
 
+    grounding_chain = None
+    if prov_dict and prov_dict.get("grounding_metadata"):
+        gm = prov_dict["grounding_metadata"]
+        grounding_chain = {
+            "search_queries": gm.get("search_queries", []),
+            "chunk_count": len(gm.get("chunks", [])),
+            "coverage": gm.get("coverage"),
+            "source_uris": [c.get("uri") for c in gm.get("chunks", []) if c.get("uri")],
+        }
+
     fire_webhook_event(session, escrow, "escrow.delivered")
     log_settlement_event(
         escrow_id=escrow.id,
@@ -552,6 +631,7 @@ def deliver(
         provider_id=escrow.provider_id,
         amount=int(escrow.amount),
         status=escrow.status,
+        grounding_chain=grounding_chain,
     )
 
     return DeliverResponse(
@@ -782,7 +862,11 @@ def release(
         session.add(escrow)
 
         tx_type = "escrow_holdback_release" if is_holdback else "escrow_release"
-        tx_desc = "Holdback released - efficacy approved" if is_holdback else "Task completed - payment released"
+        tx_desc = (
+            "Holdback released - efficacy approved"
+            if is_holdback
+            else "Task completed - payment released"
+        )
 
         session.add(
             Transaction(
@@ -802,7 +886,8 @@ def release(
                     to_account=None,
                     amount=pay_fee,
                     tx_type="fee",
-                    description="Platform transaction fee" + (" (holdback)" if is_holdback else ""),
+                    description="Platform transaction fee"
+                    + (" (holdback)" if is_holdback else ""),
                 )
             )
 
@@ -860,7 +945,9 @@ def refund(
         is_holdback = escrow.status == "partially_released"
 
         if is_holdback:
-            refund_total = int(escrow.holdback_amount or 0) + int(escrow.holdback_fee or 0)
+            refund_total = int(escrow.holdback_amount or 0) + int(
+                escrow.holdback_fee or 0
+            )
         else:
             refund_total = int(escrow.amount + escrow.fee_amount)
 
@@ -884,8 +971,10 @@ def refund(
         session.add(escrow)
 
         tx_type = "escrow_holdback_refund" if is_holdback else "escrow_refund"
-        tx_desc = (
-            req.reason or ("Holdback refunded - efficacy not met" if is_holdback else "Task failed or cancelled")
+        tx_desc = req.reason or (
+            "Holdback refunded - efficacy not met"
+            if is_holdback
+            else "Task failed or cancelled"
         )
 
         session.add(
@@ -1159,7 +1248,9 @@ def balance(
         )
 
 
-@router.get("/exchange/transactions", response_model=TransactionsResponse, tags=["Settlement"])
+@router.get(
+    "/exchange/transactions", response_model=TransactionsResponse, tags=["Settlement"]
+)
 @limiter.limit(settings.rate_limit_authenticated)
 def transactions(
     request: Request,
@@ -1202,7 +1293,11 @@ def transactions(
     )
 
 
-@router.get("/exchange/escrows/{escrow_id}", response_model=EscrowDetailResponse, tags=["Settlement"])
+@router.get(
+    "/exchange/escrows/{escrow_id}",
+    response_model=EscrowDetailResponse,
+    tags=["Settlement"],
+)
 @limiter.limit(settings.rate_limit_authenticated)
 def get_escrow(
     request: Request,
@@ -1263,7 +1358,12 @@ def list_escrows(
     )
 
 
-@router.post("/exchange/escrow/batch", status_code=201, response_model=BatchEscrowResponse, tags=["Settlement"])
+@router.post(
+    "/exchange/escrow/batch",
+    status_code=201,
+    response_model=BatchEscrowResponse,
+    tags=["Settlement"],
+)
 @limiter.limit(settings.rate_limit_authenticated)
 def batch_create_escrow(
     request: Request,

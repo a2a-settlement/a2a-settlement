@@ -81,12 +81,40 @@ export interface SourceRef {
   content_hash?: string;
 }
 
+/** A web source used for grounding verification. */
+export interface GroundingChunk {
+  uri: string;
+  title?: string;
+}
+
+/** A text segment within a grounded deliverable. */
+export interface GroundingSegment {
+  text: string;
+  start_index: number;
+  end_index: number;
+}
+
+/** Links a text segment to the grounding chunks that support it. */
+export interface GroundingSupport {
+  segment: GroundingSegment;
+  chunk_indices: number[];
+}
+
+/** Web grounding metadata from Google Search Grounding verification. */
+export interface GroundingMetadata {
+  chunks: GroundingChunk[];
+  supports: GroundingSupport[];
+  search_queries: string[];
+  coverage?: number;
+}
+
 /** Provenance attestation attached to a deliverable. */
 export interface Provenance {
   source_type: "api" | "database" | "web" | "generated" | "hybrid";
   source_refs: SourceRef[];
   attestation_level: "self_declared" | "signed" | "verifiable";
   signature?: string;
+  grounding_metadata?: GroundingMetadata;
 }
 
 export type AttestationLevel = "self_declared" | "signed" | "verifiable";

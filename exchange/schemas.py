@@ -135,11 +135,35 @@ class SourceRef(BaseModel):
     content_hash: str | None = None
 
 
+class GroundingChunk(BaseModel):
+    uri: str
+    title: str | None = None
+
+
+class GroundingSegment(BaseModel):
+    text: str
+    start_index: int
+    end_index: int
+
+
+class GroundingSupport(BaseModel):
+    segment: GroundingSegment
+    chunk_indices: list[int]
+
+
+class GroundingMetadata(BaseModel):
+    chunks: list[GroundingChunk] = []
+    supports: list[GroundingSupport] = []
+    search_queries: list[str] = []
+    coverage: float | None = None
+
+
 class Provenance(BaseModel):
     source_type: Literal["api", "database", "web", "generated", "hybrid"]
     source_refs: list[SourceRef] = []
     attestation_level: Literal["self_declared", "signed", "verifiable"]
     signature: str | None = None
+    grounding_metadata: GroundingMetadata | None = None
 
 
 AttestationLevel = Literal["self_declared", "signed", "verifiable"]
