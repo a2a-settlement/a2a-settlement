@@ -169,6 +169,35 @@ class Provenance(BaseModel):
 AttestationLevel = Literal["self_declared", "signed", "verifiable"]
 
 
+# --- Verifiable Intent (VI) ---
+
+
+class VICredentialChain(BaseModel):
+    """Optional Verifiable Intent credential chain bound to an escrow.
+
+    Carries the SD-JWT delegation chain (L1 -> L2 -> L3) from the VI spec.
+    In Immediate mode only L1+L2 are present; in Autonomous mode L3a/L3b
+    prove the agent acted within L2 constraints.
+    """
+
+    l1_sd_jwt: str
+    l2_kb_sd_jwt: str
+    l3a_kb_sd_jwt: str | None = None
+    l3b_kb_sd_jwt: str | None = None
+    mode: Literal["immediate", "autonomous"]
+    sd_hash_verified: bool = False
+
+
+class VIAttestation(BaseModel):
+    """A2A-SE attestation formatted for VI's agent_attestation claim (spec section 9.2)."""
+
+    type: str
+    value: dict
+
+
+# --- Settlement ---
+
+
 class EscrowRequest(BaseModel):
     provider_id: str
     amount: int
@@ -179,6 +208,7 @@ class EscrowRequest(BaseModel):
     depends_on: list[str] | None = None
     deliverables: list[Deliverable] | None = None
     required_attestation_level: AttestationLevel | None = None
+    vi_credential_chain: VICredentialChain | None = None
 
 
 class EscrowResponse(BaseModel):
@@ -337,6 +367,7 @@ class EscrowDetailResponse(BaseModel):
     score: int | None = None
     efficacy_check_at: datetime | None = None
     efficacy_criteria: str | None = None
+    vi_credential_chain: dict | None = None
     created_at: datetime | None = None
     resolved_at: datetime | None = None
 
@@ -355,6 +386,7 @@ class BatchEscrowItem(BaseModel):
     depends_on: list[str] | None = None
     deliverables: list[Deliverable] | None = None
     required_attestation_level: AttestationLevel | None = None
+    vi_credential_chain: VICredentialChain | None = None
 
 
 class BatchEscrowRequest(BaseModel):

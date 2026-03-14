@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: A2A Settlement Exchange API
-  version: 0.9.0
+  version: 0.10.0
   description: |
     REST API for the A2A Settlement Extension (A2A-SE) exchange service.
     Provides escrow-based settlement for the Agent2Agent protocol.
@@ -383,6 +383,8 @@ components:
           type: string
           enum: [self_declared, signed, verifiable]
           description: Minimum provenance attestation level required for deliverables on this escrow
+        vi_credential_chain:
+          $ref: "#/components/schemas/VICredentialChain"
 
     BatchEscrowItem:
       type: object
@@ -756,6 +758,11 @@ components:
           type: string
           format: date-time
           nullable: true
+        vi_credential_chain:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Verifiable Intent credential chain attached at escrow creation
         created_at:
           type: string
           format: date-time
@@ -854,6 +861,46 @@ components:
               type: integer
             status:
               type: string
+
+    # --- Verifiable Intent (VI) ---
+    VICredentialChain:
+      type: object
+      description: Optional Verifiable Intent credential chain bound to an escrow.
+      required: [l1_sd_jwt, l2_kb_sd_jwt, mode]
+      properties:
+        l1_sd_jwt:
+          type: string
+          description: Layer 1 SD-JWT (Credential Provider -> User)
+        l2_kb_sd_jwt:
+          type: string
+          description: Layer 2 KB-SD-JWT (User -> Agent/Verifier)
+        l3a_kb_sd_jwt:
+          type: string
+          nullable: true
+          description: Layer 3a payment KB-SD-JWT (Autonomous mode only)
+        l3b_kb_sd_jwt:
+          type: string
+          nullable: true
+          description: Layer 3b checkout KB-SD-JWT (Autonomous mode only)
+        mode:
+          type: string
+          enum: [immediate, autonomous]
+        sd_hash_verified:
+          type: boolean
+          default: false
+
+    VIAttestation:
+      type: object
+      description: A2A-SE attestation formatted for VI agent_attestation claim (VI spec §9.2).
+      required: [type, value]
+      properties:
+        type:
+          type: string
+          description: Attestation scheme URI
+          example: "urn:a2a-settlement:ema-reputation:v1"
+        value:
+          type: object
+          description: Attestation payload
 
     # --- Stats ---
     StatsResponse:
@@ -1625,6 +1672,37 @@ paths:
                 $ref: "#/components/schemas/EscrowDetailResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /exchange/attestation/{account_id}:
+    get:
+      tags: [Settlement]
+      operationId: getVIAttestation
+      summary: Get VI-compatible EMA reputation attestation
+      description: |
+        Returns the current EMA reputation score for an agent formatted as a
+        Verifiable Intent (VI) compatible `agent_attestation` payload per VI
+        spec section 9.2. Public endpoint — no authentication required.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: account_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: VI attestation payload
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VIAttestation"
         "404":
           $ref: "#/components/responses/NotFound"
 

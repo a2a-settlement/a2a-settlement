@@ -38,6 +38,7 @@ from exchange.schemas import (
     ResolveRequest,
     TransactionItem,
     TransactionsResponse,
+    VIAttestation,
 )
 from exchange.compliance_log import log_settlement_event
 from exchange.spending_guard import SpendingLimitGuard
@@ -109,6 +110,7 @@ def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
         score=escrow.score,
         efficacy_check_at=escrow.efficacy_check_at,
         efficacy_criteria=escrow.efficacy_criteria,
+        vi_credential_chain=escrow.vi_credential_chain,
         created_at=escrow.created_at,
         resolved_at=escrow.resolved_at,
     )
@@ -508,6 +510,12 @@ def create_escrow(
                     detail=f"An active escrow already exists for this task_id (escrow_id={existing.id})",
                 )
 
+        vi_chain_json = (
+            req.vi_credential_chain.model_dump(mode="json")
+            if req.vi_credential_chain
+            else None
+        )
+
         escrow = Escrow(
             requester_id=current["id"],
             provider_id=req.provider_id,
@@ -519,6 +527,7 @@ def create_escrow(
             depends_on=req.depends_on,
             deliverables=deliverables_json,
             required_attestation_level=req.required_attestation_level,
+            vi_credential_chain=vi_chain_json,
             status="held",
             expires_at=expires_at,
             requester_did=kya_gate["requester_did"],
@@ -1456,6 +1465,12 @@ def batch_create_escrow(
             bal.available -= total_hold
             bal.held_in_escrow += total_hold
 
+            batch_vi_chain = (
+                item.vi_credential_chain.model_dump(mode="json")
+                if item.vi_credential_chain
+                else None
+            )
+
             escrow = Escrow(
                 requester_id=current["id"],
                 provider_id=item.provider_id,
@@ -1467,6 +1482,7 @@ def batch_create_escrow(
                 depends_on=resolved_deps,
                 deliverables=deliverables_json,
                 required_attestation_level=item.required_attestation_level,
+                vi_credential_chain=batch_vi_chain,
                 status="held",
                 expires_at=expires_at,
                 requester_did=kya_gate["requester_did"],
@@ -1510,3 +1526,77 @@ def batch_create_escrow(
         fire_webhook_event(session, esc, "escrow.created")
 
     return BatchEscrowResponse(group_id=group_id, escrows=created)
+
+
+# ---------------------------------------------------------------------------
+# VI Attestation
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/exchange/attestation/{account_id}",
+    response_model=VIAttestation,
+    tags=["Settlement"],
+)
+@limiter.limit(settings.rate_limit_public)
+def get_vi_attestation(
+    request: Request,
+    account_id: str,
+    session: Session = Depends(get_session),
+) -> VIAttestation:
+    """Return the current EMA reputation score formatted as a VI-compatible
+    ``agent_attestation`` payload (Verifiable Intent spec section 9.2).
+
+    This is a public endpoint — verifiers can fetch fresh attestations
+    without authenticating as the target agent.
+    """
+    import hashlib
+    import json as _json
+
+    acct = session.get(Account, account_id)
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    total_completed = (
+        session.execute(
+            select(sa_func.count())
+            .select_from(Escrow)
+            .where(
+                Escrow.provider_id == account_id,
+                Escrow.status.in_(["released", "refunded", "disputed", "partially_released"]),
+            )
+        ).scalar_one()
+    )
+
+    dispute_count = (
+        session.execute(
+            select(sa_func.count())
+            .select_from(Escrow)
+            .where(
+                Escrow.provider_id == account_id,
+                Escrow.status.in_(["disputed", "refunded"]),
+            )
+        ).scalar_one()
+    )
+
+    dispute_rate = dispute_count / total_completed if total_completed else 0.0
+
+    now = _now()
+    value_payload = {
+        "score": round(float(acct.reputation), 4),
+        "lambda": 0.1,
+        "task_count": total_completed,
+        "dispute_rate": round(dispute_rate, 4),
+        "window_days": 90,
+        "exchange_id": settings.exchange_id if hasattr(settings, "exchange_id") else "a2a-se-default",
+        "exchange_url": str(request.base_url).rstrip("/"),
+        "issued_at": now.isoformat(),
+    }
+
+    canonical = _json.dumps(value_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    value_payload["signature"] = hashlib.sha256(canonical).hexdigest()
+
+    return VIAttestation(
+        type="urn:a2a-settlement:ema-reputation:v1",
+        value=value_payload,
+    )

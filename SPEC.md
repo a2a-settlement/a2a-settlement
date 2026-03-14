@@ -1,6 +1,6 @@
 # A2A Settlement Extension (A2A-SE)
 
-Specification v0.8.1
+Specification v0.9.0
 
 Extension URI: `https://a2a-settlement.org/extensions/settlement/v1`
 
@@ -1498,7 +1498,71 @@ A2A-SE can use AP2 as an upstream negotiation layer: AP2 negotiates the payment 
 
 ---
 
-## 15. Changelog
+## 15. Verifiable Intent (VI) Integration
+
+A2A-SE integrates with the [Verifiable Intent](https://verifiableintent.dev/) specification to bridge authorization proof with settlement accountability. VI provides cryptographic delegation chains proving a human authorized an agent's actions; A2A-SE provides the post-execution trust layer proving the agent delivered satisfactorily.
+
+### 15.1. VI Credential Chain Binding
+
+When creating an escrow, requesters MAY attach a VI credential chain via the optional `vi_credential_chain` field on `POST /exchange/escrow`. The chain is stored alongside the escrow and returned in `GET /exchange/escrows/{escrow_id}` responses.
+
+```json
+{
+  "vi_credential_chain": {
+    "l1_sd_jwt": "<L1 SD-JWT>",
+    "l2_kb_sd_jwt": "<L2 KB-SD-JWT or KB-SD-JWT+KB>",
+    "l3a_kb_sd_jwt": "<L3a payment KB-SD-JWT>",
+    "l3b_kb_sd_jwt": "<L3b checkout KB-SD-JWT>",
+    "mode": "autonomous"
+  }
+}
+```
+
+In `immediate` mode, only `l1_sd_jwt` and `l2_kb_sd_jwt` are present. In `autonomous` mode, `l3a_kb_sd_jwt` and `l3b_kb_sd_jwt` carry the agent's fulfillment proof.
+
+### 15.2. EMA Reputation as `agent_attestation`
+
+VI defines an optional `agent_attestation` claim (VI spec §9.2) for carrying agent identity or security attestations. A2A-SE defines the `urn:a2a-settlement:ema-reputation:v1` attestation type that packages the agent's EMA reputation score for inclusion in VI credentials.
+
+The `GET /exchange/attestation/{account_id}` endpoint returns the current EMA score formatted as a VI-compatible `agent_attestation` payload:
+
+```json
+{
+  "type": "urn:a2a-settlement:ema-reputation:v1",
+  "value": {
+    "score": 0.8723,
+    "lambda": 0.1,
+    "task_count": 142,
+    "dispute_rate": 0.03,
+    "exchange_url": "https://exchange.example.com",
+    "exchange_id": "a2a-se-prod-001",
+    "issued_at": "2026-03-14T12:00:00Z",
+    "signature": "<SHA-256 over canonical payload>"
+  }
+}
+```
+
+### 15.3. Full-Chain Disclosure for Dispute Resolution
+
+When a VI credential chain is attached to a disputed escrow, the AI Mediator performs full-chain disclosure as part of evidence collection. The disclosed L2 constraints and L3 fulfillment values feed into the LLM evaluation alongside deliverables, provenance results, and reputation history. This allows the mediator to evaluate whether the agent's actions fell within the user's cryptographically bound constraints.
+
+### 15.4. Agent-to-Agent Chains Without Human Principal
+
+VI assumes a human user at the top of every delegation chain. A2A-SE extends this model to agent-to-agent transactions where no human is in the loop. Trust in these chains is established through escrow (economic commitment), EMA reputation (historical performance), and provenance verification (evidence of delivery quality). When a human-originated VI chain exists upstream, it MAY be referenced in escrow metadata to maintain provenance back to the human principal.
+
+---
+
+## 16. Changelog
+
+### v0.9.0 (2026-03-14)
+
+- Added Verifiable Intent (VI) integration (Section 15).
+- Added optional `vi_credential_chain` field on escrow creation for binding VI SD-JWT credential chains to settlement lifecycle (Section 15.1).
+- Added `VICredentialChain` and `VIAttestation` schemas.
+- Added `GET /exchange/attestation/{account_id}` public endpoint returning EMA reputation formatted as VI `agent_attestation` claim (Section 15.2).
+- Defined `urn:a2a-settlement:ema-reputation:v1` attestation scheme for VI §9.2 extension point.
+- Added VI full-chain disclosure as evidence source for AI Mediator dispute evaluation (Section 15.3).
+- Documented agent-to-agent delegation chains without human principal (Section 15.4).
 
 ### v0.8.1 (2026-02-19)
 
