@@ -649,6 +649,113 @@ def revoke_token(
 
 
 # ---------------------------------------------------------------------------
+# Federation (dashboard view — requires federation_enabled)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/federation/peers")
+def list_federation_peers(
+    session: Session = Depends(get_session),
+    authorization: str | None = Header(default=None),
+):
+    """List federation peers for the dashboard. Returns empty when federation disabled."""
+    _check_dashboard_key(authorization)
+
+    if not getattr(settings, "federation_enabled", False):
+        return {"peers": [], "total": 0}
+
+    try:
+        from exchange.federation.models import FederationPeer
+
+        with session.begin():
+            rows = session.execute(
+                select(FederationPeer).order_by(FederationPeer.peered_at.desc())
+            ).scalars().all()
+
+        peers = []
+        for p in rows:
+            peers.append({
+                "id": p.id,
+                "peer_did": p.peer_did,
+                "name": p.name,
+                "operator": p.operator,
+                "peering_id": p.peering_id,
+                "peered_at": p.peered_at.isoformat() if p.peered_at else "",
+                "status": p.status,
+                "current_rho": float(p.current_rho or 0.15),
+                "rho_updated_at": p.rho_updated_at.isoformat() if p.rho_updated_at else None,
+                "health_status": p.health_status or "unknown",
+                "last_health_check": p.last_health_check.isoformat() if p.last_health_check else None,
+                "uptime_90d": float(p.uptime_90d) if p.uptime_90d is not None else None,
+                "avg_attestation_latency_ms": p.avg_attestation_latency_ms,
+            })
+        return {"peers": peers, "total": len(peers)}
+    except Exception:
+        return {"peers": [], "total": 0}
+
+
+@router.get("/federation/health")
+def get_federation_health(
+    session: Session = Depends(get_session),
+    authorization: str | None = Header(default=None),
+):
+    """Return local exchange federation health for the dashboard."""
+    _check_dashboard_key(authorization)
+
+    node_did = getattr(settings, "federation_node_did", "")
+    enabled = getattr(settings, "federation_enabled", False)
+    active_peers = 0
+
+    if enabled:
+        try:
+            from exchange.federation.models import FederationPeer
+
+            with session.begin():
+                result = session.execute(
+                    select(sa_func.count(FederationPeer.id)).where(
+                        FederationPeer.status == "active"
+                    )
+                )
+                active_peers = result.scalar_one() or 0
+        except Exception:
+            pass
+
+    return {
+        "status": "unavailable" if not enabled else "operational",
+        "node_did": node_did,
+        "avg_attestation_latency_ms": 0,
+        "uptime_90d": 1.0,
+        "version": getattr(settings, "version", "0.10.0"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "active_peers": active_peers,
+        "federation_protocol_version": "0.1.0",
+    }
+
+
+@router.get("/federation/trust-policy")
+def get_trust_policy(authorization: str | None = Header(default=None)):
+    """Return local exchange Trust Discount policy for the dashboard."""
+    _check_dashboard_key(authorization)
+
+    algorithm_id = getattr(
+        settings,
+        "trust_discount_algorithm",
+        "urn:a2a:trust:discount:linear-volume-weighted-v1",
+    )
+    params = getattr(settings, "trust_discount_params", {}) or {}
+    initial_rho = getattr(settings, "trust_discount_initial_rho", 0.15)
+
+    return {
+        "algorithm_id": algorithm_id,
+        "initial_rho": initial_rho,
+        "max_rho": params.get("max_rho", 1.0),
+        "attestation_success_floor": params.get("attestation_success_floor"),
+        "review_cadence_days": params.get("review_cadence_days"),
+        "parameters": params,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 

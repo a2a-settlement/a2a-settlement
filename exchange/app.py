@@ -156,6 +156,18 @@ def create_app() -> FastAPI:
     app.include_router(api_router, prefix="/v1")
     app.include_router(api_router, prefix="/api/v1")
 
+    # Federation endpoints (mounted at root, not versioned)
+    if getattr(settings, "federation_enabled", False):
+        from exchange.federation.peer import router as peer_router
+        from exchange.federation.verify import router as verify_router
+        from exchange.federation.attestation_import import router as import_router
+        from exchange.federation.health import router as health_router
+
+        app.include_router(peer_router)
+        app.include_router(verify_router)
+        app.include_router(import_router)
+        app.include_router(health_router)
+
     return app
 
 

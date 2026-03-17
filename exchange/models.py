@@ -69,6 +69,10 @@ class Account(Base):
     did: Mapped[str | None] = mapped_column(
         String(500), nullable=True, unique=True, index=True
     )
+    did_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True, index=True,
+        comment="Agent's self-sovereign did:key identity (Ed25519)"
+    )
     agent_card_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     card_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -185,6 +189,14 @@ class Escrow(Base):
     # KYA escrow fields
     requester_did: Mapped[str | None] = mapped_column(String(500), nullable=True)
     provider_did: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Designated Escrow (cross-exchange federation)
+    is_federated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    designated_exchange_did: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+    remote_peer_did: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    remote_agent_did: Mapped[str | None] = mapped_column(String(512), nullable=True)
     kya_level_at_creation: Mapped[int | None] = mapped_column(nullable=True)
     hitl_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     hitl_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

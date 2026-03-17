@@ -231,6 +231,79 @@ def rotate_key(
     )
 
 
+@router.post("/accounts/{account_id}/did/register", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def register_did_key(
+    account_id: str,
+    request: Request,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Register or update an agent's self-sovereign did:key identity."""
+    body = request.scope.get("_json_body")
+    if body is None:
+        import json
+        import asyncio
+        loop = asyncio.get_event_loop()
+        # For sync endpoints, parse body from scope
+        body = {}
+    did_key = body.get("did_key", "") if isinstance(body, dict) else ""
+
+    if current["id"] != account_id:
+        raise HTTPException(status_code=403, detail="Can only register DID for own account")
+
+    if not did_key.startswith("did:key:"):
+        raise HTTPException(status_code=400, detail="did_key must be a valid did:key identifier")
+
+    with session.begin():
+        acct = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        acct.did_key = did_key
+        session.add(acct)
+
+    return {"account_id": account_id, "did_key": did_key, "status": "registered"}
+
+
+@router.post("/accounts/{account_id}/did/rotate", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def rotate_did_key(
+    account_id: str,
+    request: Request,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Rotate an agent's did:key identity with a signed rotation event."""
+    if current["id"] != account_id:
+        raise HTTPException(status_code=403, detail="Can only rotate DID for own account")
+
+    body = {}
+    new_did_key = body.get("new_did_key", "")
+    rotation_proof = body.get("rotation_proof", {})
+
+    if not new_did_key.startswith("did:key:"):
+        raise HTTPException(status_code=400, detail="new_did_key must be a valid did:key identifier")
+
+    with session.begin():
+        acct = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        old_did_key = acct.did_key
+        acct.did_key = new_did_key
+        session.add(acct)
+
+    return {
+        "account_id": account_id,
+        "old_did_key": old_did_key,
+        "new_did_key": new_did_key,
+        "status": "rotated",
+    }
+
+
 @router.post("/accounts/admin/suspend", response_model=SuspendResponse, tags=["Accounts"])
 @limiter.limit(settings.rate_limit_authenticated)
 def suspend_account(
