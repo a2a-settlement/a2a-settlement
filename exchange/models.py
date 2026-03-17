@@ -260,6 +260,52 @@ class IdempotencyRecord(Base):
     )
 
 
+class Attestation(Base):
+    __tablename__ = "attestations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    attestation_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", index=True
+    )
+
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revocation_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    parent_attestation_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("attestations.id"), nullable=True
+    )
+    payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    warning_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "attestation_type IN ('identity', 'reputation', 'transaction', 'capability')",
+            name="ck_attestation_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'expired', 'revoked', 'renewed')",
+            name="ck_attestation_status",
+        ),
+    )
+
+
 class EvidenceSubmission(Base):
     __tablename__ = "evidence_submissions"
 

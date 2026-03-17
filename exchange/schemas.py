@@ -196,6 +196,85 @@ class VIAttestation(BaseModel):
     value: dict
 
 
+# --- Attestation Lifecycle ---
+
+
+class AttestationType(str, Enum):
+    IDENTITY = "identity"
+    REPUTATION = "reputation"
+    TRANSACTION = "transaction"
+    CAPABILITY = "capability"
+
+
+class AttestationStatus(str, Enum):
+    ACTIVE = "active"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+    RENEWED = "renewed"
+
+
+class RevocationReason(str, Enum):
+    KEY_COMPROMISE = "key_compromise"
+    ERRONEOUS_ISSUANCE = "erroneous_issuance"
+    DEREGISTRATION = "deregistration"
+    POLICY_VIOLATION = "policy_violation"
+
+
+class AttestationCreate(BaseModel):
+    attestation_type: AttestationType
+    metadata: dict | None = None
+
+
+class AttestationResponse(BaseModel):
+    id: str
+    account_id: str
+    attestation_type: str
+    status: str
+    issued_at: datetime
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
+    parent_attestation_id: str | None = None
+    payload_hash: str | None = None
+    ttl_remaining_seconds: float | None = None
+
+
+class AttestationStatusResponse(BaseModel):
+    """OCSP-style lightweight status check response."""
+    id: str
+    status: str
+    attestation_type: str
+    issued_at: datetime
+    expires_at: datetime | None = None
+    ttl_remaining_seconds: float | None = None
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
+    in_flight_grace: bool = False
+
+
+class RevokeAttestationRequest(BaseModel):
+    reason: RevocationReason
+    signatures: list[str] = Field(default_factory=list)
+
+
+class RevokeAttestationResponse(BaseModel):
+    id: str
+    status: str = "revoked"
+    revoked_at: datetime
+    revocation_reason: str
+
+
+class RenewAttestationResponse(BaseModel):
+    old_attestation_id: str
+    new_attestation: AttestationResponse
+    fee_charged: int
+
+
+class AttestationListResponse(BaseModel):
+    attestations: list[AttestationResponse]
+    total: int
+
+
 # --- Settlement ---
 
 

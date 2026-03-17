@@ -1671,6 +1671,10 @@ def get_vi_attestation(
     if not acct:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    now = _now()
+    window_days = settings.attestation_ttl_reputation_days
+    window_start = now - timedelta(days=window_days)
+
     total_completed = (
         session.execute(
             select(sa_func.count())
@@ -1678,6 +1682,7 @@ def get_vi_attestation(
             .where(
                 Escrow.provider_id == account_id,
                 Escrow.status.in_(["released", "refunded", "disputed", "partially_released"]),
+                Escrow.created_at >= window_start,
             )
         ).scalar_one()
     )
@@ -1689,19 +1694,20 @@ def get_vi_attestation(
             .where(
                 Escrow.provider_id == account_id,
                 Escrow.status.in_(["disputed", "refunded"]),
+                Escrow.created_at >= window_start,
             )
         ).scalar_one()
     )
 
     dispute_rate = dispute_count / total_completed if total_completed else 0.0
 
-    now = _now()
     value_payload = {
         "score": round(float(acct.reputation), 4),
         "lambda": 0.1,
         "task_count": total_completed,
         "dispute_rate": round(dispute_rate, 4),
-        "window_days": 90,
+        "window_days": window_days,
+        "window_start": window_start.isoformat(),
         "exchange_id": settings.exchange_id if hasattr(settings, "exchange_id") else "a2a-se-default",
         "exchange_url": str(request.base_url).rstrip("/"),
         "issued_at": now.isoformat(),

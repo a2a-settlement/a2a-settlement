@@ -3,11 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from exchange.config import SessionLocal, settings
-from exchange.models import Escrow
 from exchange.observers import PaymentTimeoutObserver
 from exchange.webhooks import fire_webhook_event
 
@@ -73,11 +71,35 @@ def run_expiry_sweep() -> dict:
         for escrow in results["warned"]:
             fire_webhook_event(session, escrow, "escrow.expiring_soon")
 
+        from exchange.webhooks import fire_account_webhook_event
+
+        for att in results.get("expired_attestations", []):
+            fire_account_webhook_event(
+                att.account_id,
+                "attestation.expired",
+                {
+                    "attestation_id": att.id,
+                    "attestation_type": att.attestation_type,
+                },
+            )
+        for att in results.get("warned_attestations", []):
+            fire_account_webhook_event(
+                att.account_id,
+                "attestation.expiring_soon",
+                {
+                    "attestation_id": att.id,
+                    "attestation_type": att.attestation_type,
+                    "expires_at": att.expires_at.isoformat() if att.expires_at else None,
+                },
+            )
+
         return {
             "expired_held": len(results["expired_held"]),
             "expired_disputes": len(results["expired_disputes"]),
             "defaulted_evidence": len(results["defaulted_evidence"]),
             "warned": len(results["warned"]),
+            "expired_attestations": len(results.get("expired_attestations", [])),
+            "warned_attestations": len(results.get("warned_attestations", [])),
         }
     finally:
         session.close()
@@ -106,5 +128,15 @@ async def background_expiry_loop() -> None:
                 )
             if counts["warned"]:
                 logger.info("Background sweep sent %d expiry warning(s)", counts["warned"])
+            if counts.get("expired_attestations"):
+                logger.info(
+                    "Background sweep expired %d attestation(s)",
+                    counts["expired_attestations"],
+                )
+            if counts.get("warned_attestations"):
+                logger.info(
+                    "Background sweep sent %d attestation expiry warning(s)",
+                    counts["warned_attestations"],
+                )
         except Exception:
             logger.exception("Error in background expiry sweep")

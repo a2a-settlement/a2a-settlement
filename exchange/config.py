@@ -114,6 +114,14 @@ class Settings:
     # Compliance audit (Merkle tree)
     compliance_enabled: bool = _get_bool("A2A_EXCHANGE_COMPLIANCE_ENABLED", False)
 
+    # Attestation TTL (global maximums — instances can configure stricter values)
+    attestation_ttl_identity_days: int = _get_int("A2A_EXCHANGE_ATTESTATION_TTL_IDENTITY_DAYS", 365)
+    attestation_ttl_reputation_days: int = _get_int("A2A_EXCHANGE_ATTESTATION_TTL_REPUTATION_DAYS", 90)
+    attestation_ttl_capability_days: int = _get_int("A2A_EXCHANGE_ATTESTATION_TTL_CAPABILITY_DAYS", 180)
+    attestation_ttl_warning_percent: int = _get_int("A2A_EXCHANGE_ATTESTATION_TTL_WARNING_PCT", 80)
+    attestation_grace_period_hours: int = _get_int("A2A_EXCHANGE_ATTESTATION_GRACE_HOURS", 72)
+    attestation_renewal_fee: int = _get_int("A2A_EXCHANGE_ATTESTATION_RENEWAL_FEE", 1)
+
 
 settings = Settings()
 

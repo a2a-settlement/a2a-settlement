@@ -17,7 +17,7 @@ from exchange.config import engine, settings
 from exchange.middleware import IdempotencyMiddleware, RequestIdMiddleware
 from exchange.models import Base
 from exchange.ratelimit import limiter
-from exchange.routes import accounts, dashboard, kya_admin, settlement, stats, webhooks
+from exchange.routes import accounts, attestations, dashboard, kya_admin, settlement, stats, webhooks
 from exchange.schemas import HealthResponse
 from exchange.tasks import background_expiry_loop
 
@@ -147,6 +147,7 @@ def create_app() -> FastAPI:
     api_router = APIRouter()
     api_router.include_router(accounts.router)
     api_router.include_router(settlement.router)
+    api_router.include_router(attestations.router)
     api_router.include_router(stats.router)
     api_router.include_router(webhooks.router)
     api_router.include_router(kya_admin.router)

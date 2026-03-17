@@ -902,6 +902,103 @@ components:
           type: object
           description: Attestation payload
 
+    # --- Attestations ---
+    AttestationResponse:
+      type: object
+      required: [id, account_id, attestation_type, status, issued_at]
+      properties:
+        id:
+          type: string
+        account_id:
+          type: string
+        attestation_type:
+          type: string
+          enum: [identity, reputation, transaction, capability]
+        status:
+          type: string
+          enum: [active, expired, revoked, renewed]
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+        revocation_reason:
+          type: string
+          enum: [key_compromise, erroneous_issuance, deregistration, policy_violation]
+        parent_attestation_id:
+          type: string
+        payload_hash:
+          type: string
+        ttl_remaining_seconds:
+          type: number
+
+    AttestationStatusResponse:
+      type: object
+      required: [id, status, attestation_type, issued_at, in_flight_grace]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [active, expired, revoked, renewed]
+        attestation_type:
+          type: string
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        ttl_remaining_seconds:
+          type: number
+        revoked_at:
+          type: string
+          format: date-time
+        revocation_reason:
+          type: string
+        in_flight_grace:
+          type: boolean
+
+    RevokeAttestationResponse:
+      type: object
+      required: [id, status, revoked_at, revocation_reason]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        revoked_at:
+          type: string
+          format: date-time
+        revocation_reason:
+          type: string
+
+    RenewAttestationResponse:
+      type: object
+      required: [old_attestation_id, new_attestation, fee_charged]
+      properties:
+        old_attestation_id:
+          type: string
+        new_attestation:
+          $ref: "#/components/schemas/AttestationResponse"
+        fee_charged:
+          type: integer
+
+    AttestationListResponse:
+      type: object
+      required: [attestations, total]
+      properties:
+        attestations:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttestationResponse"
+        total:
+          type: integer
+
     # --- Stats ---
     StatsResponse:
       type: object
@@ -1705,6 +1802,150 @@ paths:
                 $ref: "#/components/schemas/VIAttestation"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /exchange/attestations:
+    post:
+      tags: [Attestations]
+      operationId: issueAttestation
+      summary: Issue a new attestation
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attestation_type]
+              properties:
+                attestation_type:
+                  type: string
+                  enum: [identity, reputation, transaction, capability]
+                metadata:
+                  type: object
+      responses:
+        "201":
+          description: Attestation issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttestationResponse"
+    get:
+      tags: [Attestations]
+      operationId: listAttestations
+      summary: List attestations
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: account_id
+          in: query
+          schema:
+            type: string
+        - name: attestation_type
+          in: query
+          schema:
+            type: string
+            enum: [identity, reputation, transaction, capability]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, expired, revoked, renewed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Attestation list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttestationListResponse"
+
+  /exchange/attestations/{attestation_id}/status:
+    get:
+      tags: [Attestations]
+      operationId: getAttestationStatus
+      summary: OCSP-style attestation status check
+      parameters:
+        - name: attestation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Attestation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttestationStatusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /exchange/attestations/{attestation_id}/revoke:
+    post:
+      tags: [Attestations]
+      operationId: revokeAttestation
+      summary: Revoke an attestation
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: attestation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  enum: [key_compromise, erroneous_issuance, deregistration, policy_violation]
+                signatures:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Attestation revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokeAttestationResponse"
+
+  /exchange/attestations/{attestation_id}/renew:
+    post:
+      tags: [Attestations]
+      operationId: renewAttestation
+      summary: Renew an attestation (charges ATE micro-fee)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: attestation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Attestation renewed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenewAttestationResponse"
 
   /stats:
     get:

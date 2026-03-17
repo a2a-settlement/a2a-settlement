@@ -6,8 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
-from exchange.models import Balance, Escrow, Transaction
-from exchange.webhooks import fire_webhook_event
+from exchange.models import Attestation, Balance, Escrow, Transaction
 
 logger = logging.getLogger(__name__)
 
@@ -219,15 +218,71 @@ class PaymentTimeoutObserver:
             )
         )
 
+    def expire_stale_attestations(self, session: Session) -> list[Attestation]:
+        """Transition active attestations past their TTL to expired."""
+        now = _now()
+        stale = (
+            session.execute(
+                select(Attestation).where(
+                    and_(
+                        Attestation.status == "active",
+                        Attestation.expires_at.isnot(None),
+                        Attestation.expires_at < now,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for att in stale:
+            att.status = "expired"
+            session.add(att)
+        return stale
+
+    def warn_expiring_attestations(
+        self, session: Session, warning_pct: int = 80
+    ) -> list[Attestation]:
+        """Fire warnings for attestations that have consumed >= warning_pct of their TTL."""
+        now = _now()
+        active = (
+            session.execute(
+                select(Attestation).where(
+                    and_(
+                        Attestation.status == "active",
+                        Attestation.expires_at.isnot(None),
+                        Attestation.warning_sent_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        warned: list[Attestation] = []
+        for att in active:
+            total_ttl = (att.expires_at - att.issued_at).total_seconds()
+            if total_ttl <= 0:
+                continue
+            elapsed = (now - att.issued_at).total_seconds()
+            pct_consumed = (elapsed / total_ttl) * 100
+            if pct_consumed >= warning_pct:
+                att.warning_sent_at = now
+                session.add(att)
+                warned.append(att)
+        return warned
+
     def sweep(self, session: Session) -> dict:
         """Run all timeout checks in a single pass. Returns counts by category."""
         expired_held = self.expire_stale_held(session)
         expired_disputes = self.expire_stale_disputes(session)
         defaulted_evidence = self.expire_evidence_windows(session)
         warned = self.warn_expiring_soon(session)
+        expired_attestations = self.expire_stale_attestations(session)
+        warned_attestations = self.warn_expiring_attestations(session)
         return {
             "expired_held": expired_held,
             "expired_disputes": expired_disputes,
             "defaulted_evidence": defaulted_evidence,
             "warned": warned,
+            "expired_attestations": expired_attestations,
+            "warned_attestations": warned_attestations,
         }

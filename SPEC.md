@@ -1552,7 +1552,66 @@ VI assumes a human user at the top of every delegation chain. A2A-SE extends thi
 
 ---
 
-## 16. Changelog
+## 16. Attestation TTL and Revocation Lifecycle
+
+Attestations are immutable in the provenance chain (append-only) but gain lifecycle metadata governing their operational validity. This separates the permanent historical audit trail from the active, mutable trust state.
+
+### 16.1 Attestation Types and TTL Tiers
+
+| Type | Global Max TTL | Renewal | Notes |
+|------|----------------|---------|-------|
+| Identity (KYA verification) | 365 days | Required | Hard security boundary on expiry |
+| Reputation (EMA scores) | 90 days | Auto-recalculated | Rolling window |
+| Transaction (settlement proofs) | Permanent | N/A | Historical records, no expiry |
+| Capability (agent skills) | 180 days | Required | Re-verified on renewal |
+
+These global maximums are hardcoded in the base protocol. Individual exchange instances MAY configure stricter TTLs via environment variables but MUST NOT exceed the protocol maximums.
+
+### 16.2 Grace Periods and In-Flight Execution
+
+- **Identity expiration/revocation:** Zero grace period. Access is immediately severed (HTTP 403).
+- **Reputation/Capability expiration:** 72-hour soft grace period. If an agent has in-flight escrows (status `held` or `evidence_pending`), those settlements may complete. The agent is blocked from initiating new escrows until renewed.
+- **Proactive warning:** The background sweep fires an `attestation.expiring_soon` webhook event when an attestation reaches 80% TTL consumption.
+
+### 16.3 Revocation
+
+Revocations are append-only: the original attestation remains, but its status transitions to `revoked`. Consuming systems check revocation status via the OCSP-style `GET /exchange/attestations/{id}/status` endpoint.
+
+- **Multi-sig requirement:** Identity and capability revocations require signatures (M-of-N multi-signature from the agent's active key and/or operator quorum). Reputation revocations do not require multi-sig.
+- **Reasons:** `key_compromise`, `erroneous_issuance`, `deregistration`, `policy_violation`.
+
+### 16.4 Renewal and ATE Tokenomics
+
+Renewing an expiring attestation requires a nominal micro-fee (default: 1 ATE) to prevent state bloat and micro-renewal spam. The fee is deducted from the agent's available balance and credited to the treasury. Renewal creates a new attestation chained to the old one via `parent_attestation_id`, preserving the full history.
+
+### 16.5 API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/exchange/attestations` | Issue a new attestation |
+| `GET` | `/exchange/attestations` | List attestations (filter by account, type, status) |
+| `GET` | `/exchange/attestations/{id}/status` | OCSP-style online status check |
+| `POST` | `/exchange/attestations/{id}/revoke` | Revoke with reason and signatures |
+| `POST` | `/exchange/attestations/{id}/renew` | Renew with ATE micro-fee |
+
+### 16.6 EMA Integration
+
+The EMA reputation scoring endpoint (`GET /exchange/attestation/{account_id}`) filters task history to the reputation TTL window (default 90 days). The response includes `window_start` and `window_days` reflecting the active boundary.
+
+---
+
+## 17. Changelog
+
+### v0.10.0 (2026-03-16)
+
+- Added Attestation TTL and Revocation Lifecycle (Section 16).
+- Added `attestations` table with `issued_at`, `expires_at`, `revoked_at`, `revocation_reason` fields.
+- Added attestation CRUD endpoints: issue, status, revoke, renew, list.
+- Added 80% TTL warning observer with `attestation.expiring_soon` webhook event.
+- Added ATE micro-fee on attestation renewal (default: 1 ATE).
+- TTL-filtered EMA reputation scoring: `window_start` boundary in VI attestation response.
+- Added multi-sig signature requirement for identity/capability revocations.
+- Added in-flight soft grace period (72h) for reputation/capability attestation expiry.
 
 ### v0.9.0 (2026-03-14)
 

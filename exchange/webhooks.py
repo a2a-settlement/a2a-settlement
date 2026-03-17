@@ -28,6 +28,10 @@ ALL_EVENTS = [
     "escrow.dispute_pending_mediation",
     "escrow.resolved",
     "account.spending_limit_breached",
+    "attestation.expiring_soon",
+    "attestation.expired",
+    "attestation.revoked",
+    "attestation.renewed",
 ]
 
 RETRY_BACKOFF = [5, 25, 125]

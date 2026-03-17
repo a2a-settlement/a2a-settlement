@@ -370,6 +370,65 @@ export interface HealthResponse {
   version: string;
 }
 
+// --- Attestation Lifecycle ---
+
+export type AttestationType = "identity" | "reputation" | "transaction" | "capability";
+export type AttestationStatusValue = "active" | "expired" | "revoked" | "renewed";
+export type RevocationReason =
+  | "key_compromise"
+  | "erroneous_issuance"
+  | "deregistration"
+  | "policy_violation";
+
+export interface AttestationResponse {
+  id: string;
+  account_id: string;
+  attestation_type: AttestationType;
+  status: AttestationStatusValue;
+  issued_at: string;
+  expires_at?: string;
+  revoked_at?: string;
+  revocation_reason?: RevocationReason;
+  parent_attestation_id?: string;
+  payload_hash?: string;
+  ttl_remaining_seconds?: number;
+}
+
+export interface AttestationStatusResponse {
+  id: string;
+  status: AttestationStatusValue;
+  attestation_type: AttestationType;
+  issued_at: string;
+  expires_at?: string;
+  ttl_remaining_seconds?: number;
+  revoked_at?: string;
+  revocation_reason?: RevocationReason;
+  in_flight_grace: boolean;
+}
+
+export interface RevokeAttestationRequest {
+  reason: RevocationReason;
+  signatures?: string[];
+}
+
+export interface RevokeAttestationResponse {
+  id: string;
+  status: "revoked";
+  revoked_at: string;
+  revocation_reason: RevocationReason;
+}
+
+export interface RenewAttestationResponse {
+  old_attestation_id: string;
+  new_attestation: AttestationResponse;
+  fee_charged: number;
+}
+
+export interface AttestationListResponse {
+  attestations: AttestationResponse[];
+  total: number;
+}
+
 /** Settlement metadata block for A2A message/task metadata. */
 export interface SettlementMetadata {
   escrowId?: string | null;
