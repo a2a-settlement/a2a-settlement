@@ -20,7 +20,7 @@ RequesterAgent  <---- A2A ---->  ProviderAgent
 Test agent payments without running any infrastructure. The public sandbox at **https://sandbox.a2a-settlement.org** gives you starter credits on registration.
 
 ```bash
-git clone https://github.com/widrss/a2a-settlement
+git clone https://github.com/a2a-settlement/a2a-settlement
 cd a2a-settlement
 pip install -e ./sdk
 A2A_EXCHANGE_URL=https://sandbox.a2a-settlement.org python examples/quickstart.py
@@ -33,7 +33,7 @@ You should see an escrow created and released, and balances updated. Registratio
 To run the exchange locally instead:
 
 ```bash
-git clone https://github.com/widrss/a2a-settlement
+git clone https://github.com/a2a-settlement/a2a-settlement
 cd a2a-settlement
 pip install -e ./sdk
 python exchange/app.py &
@@ -147,16 +147,27 @@ pytest -q
 
 ## Ecosystem
 
+### Core Infrastructure
+
 | Project | Description |
 |---------|-------------|
-| [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) | OAuth 2.0 settlement scopes for agent economic authorization — spending limits, counterparty policies, delegation chains |
-| [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) | AI-powered dispute resolution — evaluates disputed escrows, auto-resolves clear cases, escalates ambiguous ones |
-| [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard) | Human oversight dashboard — monitor agent spending, audit transactions, revoke economic authority |
-| [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) | MCP server — exposes exchange operations as tools for Claude, Cursor, LangGraph, or any MCP client |
-| [langgraph-a2a-settlement](https://github.com/a2a-settlement/langgraph-a2a-settlement) | LangGraph integration — escrow-gated graph nodes, `create_settlement_graph` |
-| [crewai-a2a-settlement](https://github.com/a2a-settlement/crewai-a2a-settlement) | CrewAI integration — `SettledCrew` / `SettledTask` wrappers |
-| [litellm-a2a-settlement](https://github.com/a2a-settlement/litellm-a2a-settlement) | LiteLLM integration — callback hooks for escrow on A2A agent calls |
-| [adk-a2a-settlement](https://github.com/a2a-settlement/adk-a2a-settlement) | Google ADK integration — `to_settled_a2a`, `SettledRemoteAgent`, settlement tools |
+| [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) | OAuth 2.0 settlement scopes — spending limits, counterparty policies, delegation chains |
+| [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) | AI-powered dispute resolution — auto-resolves clear cases, escalates ambiguous ones |
+| [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard) | Human oversight dashboard — monitor spending, audit transactions, revoke authority |
+| [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) | MCP server — settlement tools for Claude, Cursor, LangGraph, or any MCP client |
+| [settlebridge-ai](https://github.com/a2a-settlement/settlebridge-ai) | SettleBridge Gateway — trust/policy enforcement + bounty marketplace |
+| [mcp-trust-gateway](https://github.com/a2a-settlement/mcp-trust-gateway) | MCP Trust Gateway — trust, reputation, and economic accountability above OAuth |
+| [otel-agent-provenance](https://github.com/a2a-settlement/otel-agent-provenance) | OpenTelemetry semantic conventions for agent provenance and derivation lineage |
+| [a2a-federation-rfc](https://github.com/a2a-settlement/a2a-federation-rfc) | Federation protocol — interoperable reputation and settlement across exchanges |
+
+### Framework Integrations
+
+| Project | Framework | Pattern |
+|---------|-----------|---------|
+| [langgraph-a2a-settlement](https://github.com/a2a-settlement/langgraph-a2a-settlement) | LangGraph | Escrow-gated graph nodes, `create_settlement_graph` |
+| [crewai-a2a-settlement](https://github.com/a2a-settlement/crewai-a2a-settlement) | CrewAI | `SettledCrew` / `SettledTask` wrappers |
+| [litellm-a2a-settlement](https://github.com/a2a-settlement/litellm-a2a-settlement) | LiteLLM | Callback hooks for escrow on A2A agent calls |
+| [adk-a2a-settlement](https://github.com/a2a-settlement/adk-a2a-settlement) | Google ADK | `to_settled_a2a`, `SettledRemoteAgent`, settlement tools |
 
 **Environment variables:** Most integrations use `A2A_EXCHANGE_URL` (e.g. `http://localhost:3000`) and `A2A_API_KEY`. ADK and CrewAI use `A2ASE_EXCHANGE_URL` / `A2ASE_API_KEY`. The exchange API lives under `/v1`; the SDK appends this automatically.
 
