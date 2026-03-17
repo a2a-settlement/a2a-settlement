@@ -171,6 +171,17 @@ class Escrow(Base):
     # Verifiable Intent (VI) credential chain
     vi_credential_chain: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Dispute evidence fields
+    dispute_filed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    dispute_stake_amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dispute_stake_status: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    evidence_window_closes_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    mediator_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # KYA escrow fields
     requester_did: Mapped[str | None] = mapped_column(String(500), nullable=True)
     provider_did: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -246,4 +257,27 @@ class IdempotencyRecord(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class EvidenceSubmission(Base):
+    __tablename__ = "evidence_submissions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    escrow_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("escrows.id"), nullable=False, index=True
+    )
+    submitter_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    evidence_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    artifacts: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    encrypted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    encryption_key_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    attestor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    attestor_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )

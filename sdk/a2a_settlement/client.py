@@ -287,9 +287,14 @@ class SettlementExchangeClient:
             payload["reason"] = reason
         return self._post(url, payload, idempotency_key=idempotency_key)
 
-    def dispute_escrow(self, *, escrow_id: str, reason: str) -> dict[str, Any]:
+    def dispute_escrow(
+        self, *, escrow_id: str, reason: str, stake_amount: int
+    ) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/dispute")
-        return self._post(url, {"escrow_id": escrow_id, "reason": reason})
+        return self._post(
+            url,
+            {"escrow_id": escrow_id, "reason": reason, "stake_amount": stake_amount},
+        )
 
     def resolve_escrow(
         self,
@@ -298,6 +303,8 @@ class SettlementExchangeClient:
         resolution: str,
         strategy: str | None = None,
         provenance_result: dict[str, Any] | None = None,
+        mediator_context: dict[str, Any] | None = None,
+        stake_ruling: str | None = None,
     ) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/resolve")
         body: dict[str, Any] = {"escrow_id": escrow_id, "resolution": resolution}
@@ -305,7 +312,50 @@ class SettlementExchangeClient:
             body["strategy"] = strategy
         if provenance_result is not None:
             body["provenance_result"] = provenance_result
+        if mediator_context is not None:
+            body["mediator_context"] = mediator_context
+        if stake_ruling is not None:
+            body["stake_ruling"] = stake_ruling
         return self._post(url, body)
+
+    # --- Evidence ---
+
+    def submit_evidence(
+        self,
+        *,
+        escrow_id: str,
+        evidence_type: str,
+        summary: str,
+        artifacts: list[dict[str, Any]] | None = None,
+        encrypted: bool = False,
+        encryption_key_id: str | None = None,
+        attestor_id: str | None = None,
+        attestor_signature: str | None = None,
+    ) -> dict[str, Any]:
+        url = _join(self.base_url, f"/v1/exchange/escrow/{escrow_id}/evidence")
+        payload: dict[str, Any] = {
+            "evidence_type": evidence_type,
+            "summary": summary,
+        }
+        if artifacts is not None:
+            payload["artifacts"] = artifacts
+        if encrypted:
+            payload["encrypted"] = True
+        if encryption_key_id is not None:
+            payload["encryption_key_id"] = encryption_key_id
+        if attestor_id is not None:
+            payload["attestor_id"] = attestor_id
+        if attestor_signature is not None:
+            payload["attestor_signature"] = attestor_signature
+        return self._post(url, payload)
+
+    def list_evidence(self, *, escrow_id: str) -> dict[str, Any]:
+        url = _join(self.base_url, f"/v1/exchange/escrow/{escrow_id}/evidence")
+        return self._get(url)
+
+    def get_compliance_bundle(self, *, escrow_id: str) -> dict[str, Any]:
+        url = _join(self.base_url, f"/v1/exchange/escrow/{escrow_id}/compliance-bundle")
+        return self._get(url)
 
     def get_balance(self) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/balance")

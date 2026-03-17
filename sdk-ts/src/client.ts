@@ -3,6 +3,7 @@ import type {
   BalanceResponse,
   BatchEscrowRequest,
   BatchEscrowResponse,
+  ComplianceBundleResponse,
   DeliverRequest,
   DeliverResponse,
   DirectoryResponse,
@@ -11,6 +12,8 @@ import type {
   EscrowListResponse,
   EscrowRequest,
   EscrowResponse,
+  EvidenceListResponse,
+  EvidenceSubmissionResponse,
   HealthResponse,
   RefundResponse,
   RegisterRequest,
@@ -19,6 +22,7 @@ import type {
   ResolveResponse,
   RotateKeyResponse,
   StatsResponse,
+  SubmitEvidenceRequest,
   TransactionsResponse,
   UpdateSkillsResponse,
   WebhookDeleteResponse,
@@ -268,17 +272,24 @@ export class SettlementExchangeClient {
   async disputeEscrow(
     escrowId: string,
     reason: string,
+    stakeAmount: number,
   ): Promise<DisputeResponse> {
     return this.request("POST", "/v1/exchange/dispute", {
       escrow_id: escrowId,
       reason,
+      stake_amount: stakeAmount,
     });
   }
 
   async resolveEscrow(
     escrowId: string,
     resolution: "release" | "refund",
-    options?: { strategy?: string; provenance_result?: Record<string, unknown> },
+    options?: {
+      strategy?: string;
+      provenance_result?: Record<string, unknown>;
+      mediator_context?: Record<string, unknown>;
+      stake_ruling?: "return" | "forfeit";
+    },
   ): Promise<ResolveResponse> {
     return this.request("POST", "/v1/exchange/resolve", {
       escrow_id: escrowId,
@@ -286,6 +297,12 @@ export class SettlementExchangeClient {
       ...(options?.strategy != null && { strategy: options.strategy }),
       ...(options?.provenance_result != null && {
         provenance_result: options.provenance_result,
+      }),
+      ...(options?.mediator_context != null && {
+        mediator_context: options.mediator_context,
+      }),
+      ...(options?.stake_ruling != null && {
+        stake_ruling: options.stake_ruling,
       }),
     });
   }
@@ -335,6 +352,35 @@ export class SettlementExchangeClient {
     return this.request("POST", "/v1/exchange/escrow/batch", req, {
       idempotencyKey,
     });
+  }
+
+  // --- Evidence ---
+
+  async submitEvidence(
+    escrowId: string,
+    req: SubmitEvidenceRequest,
+  ): Promise<EvidenceSubmissionResponse> {
+    return this.request(
+      "POST",
+      `/v1/exchange/escrow/${escrowId}/evidence`,
+      req,
+    );
+  }
+
+  async listEvidence(escrowId: string): Promise<EvidenceListResponse> {
+    return this.request(
+      "GET",
+      `/v1/exchange/escrow/${escrowId}/evidence`,
+    );
+  }
+
+  async getComplianceBundle(
+    escrowId: string,
+  ): Promise<ComplianceBundleResponse> {
+    return this.request(
+      "GET",
+      `/v1/exchange/escrow/${escrowId}/compliance-bundle`,
+    );
   }
 
   // --- Stats ---

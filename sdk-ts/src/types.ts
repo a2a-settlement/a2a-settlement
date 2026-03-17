@@ -174,8 +174,62 @@ export interface RefundResponse {
 
 export interface DisputeResponse {
   escrow_id: string;
-  status: "disputed";
+  status: "evidence_pending";
   reason: string;
+  stake_amount: number;
+  evidence_window_closes_at?: string;
+}
+
+export type EvidenceType =
+  | "compute"
+  | "content"
+  | "service"
+  | "bounty"
+  | "third_party_attestation";
+
+export interface EvidenceArtifact {
+  artifact_type: "inline" | "uri";
+  content?: string;
+  uri?: string;
+  content_hash: string;
+  mime_type?: string;
+}
+
+export interface SubmitEvidenceRequest {
+  evidence_type: EvidenceType;
+  summary: string;
+  artifacts?: EvidenceArtifact[];
+  encrypted?: boolean;
+  encryption_key_id?: string;
+  attestor_id?: string;
+  attestor_signature?: string;
+}
+
+export interface EvidenceSubmissionResponse {
+  id: string;
+  escrow_id: string;
+  submitter_id: string;
+  evidence_type: string;
+  summary: string;
+  artifact_count: number;
+  encrypted: boolean;
+  submitted_at: string;
+}
+
+export interface EvidenceListResponse {
+  evidence: EvidenceSubmissionResponse[];
+  total: number;
+}
+
+export interface ComplianceBundleResponse {
+  escrow_id: string;
+  contract: Record<string, unknown>;
+  evidence_submissions: Record<string, unknown>[];
+  mediator_rationale?: Record<string, unknown>;
+  mediator_context?: Record<string, unknown>;
+  merkle_proof?: Record<string, unknown>;
+  rfc3161_timestamp?: string;
+  exported_at: string;
 }
 
 export interface ResolveReleaseResponse {

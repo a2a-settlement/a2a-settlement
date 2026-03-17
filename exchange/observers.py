@@ -126,13 +126,108 @@ class PaymentTimeoutObserver:
             warned.append(escrow)
         return warned
 
+    def expire_evidence_windows(self, session: Session) -> list[Escrow]:
+        """Apply default judgments when the evidence window closes.
+
+        If the respondent (non-filing party) has not submitted evidence:
+        - Provider didn't respond -> refund to requester
+        - Requester didn't respond -> release to provider
+        If both or neither submitted, transition to 'disputed' for mediation.
+        """
+        from exchange.models import EvidenceSubmission
+
+        now = _now()
+        pending = (
+            session.execute(
+                _lock(
+                    select(Escrow).where(
+                        and_(
+                            Escrow.status == "evidence_pending",
+                            Escrow.evidence_window_closes_at.isnot(None),
+                            Escrow.evidence_window_closes_at < now,
+                        )
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        defaulted: list[Escrow] = []
+        for escrow in pending:
+            submitter_ids = set(
+                session.execute(
+                    select(EvidenceSubmission.submitter_id).where(
+                        EvidenceSubmission.escrow_id == escrow.id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            filer = escrow.dispute_filed_by
+            respondent = (
+                escrow.provider_id
+                if filer == escrow.requester_id
+                else escrow.requester_id
+            )
+
+            if respondent not in submitter_ids:
+                if respondent == escrow.provider_id:
+                    _refund_escrow(
+                        session, escrow, now,
+                        "Default judgment: provider failed to submit evidence",
+                    )
+                    escrow.status = "refunded"
+                else:
+                    self._release_escrow(session, escrow, now)
+                    escrow.status = "released"
+                escrow.resolved_at = now
+                session.add(escrow)
+                defaulted.append(escrow)
+            else:
+                escrow.status = "disputed"
+                session.add(escrow)
+        return defaulted
+
+    @staticmethod
+    def _release_escrow(session: Session, escrow: Escrow, now: datetime) -> None:
+        """Release escrow funds to the provider (default judgment)."""
+        total_held = int(escrow.amount + escrow.fee_amount)
+        req_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
+        ).scalar_one_or_none()
+        prov_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == escrow.provider_id))
+        ).scalar_one_or_none()
+        if req_bal is None or prov_bal is None:
+            return
+        req_bal.held_in_escrow -= total_held
+        req_bal.total_spent += total_held
+        session.add(req_bal)
+        prov_bal.available += int(escrow.amount)
+        prov_bal.total_earned += int(escrow.amount)
+        session.add(prov_bal)
+        escrow.resolved_at = now
+        session.add(escrow)
+        session.add(
+            Transaction(
+                escrow_id=escrow.id,
+                from_account=escrow.requester_id,
+                to_account=escrow.provider_id,
+                amount=int(escrow.amount),
+                tx_type="escrow_release",
+                description="Default judgment: requester failed to submit evidence",
+            )
+        )
+
     def sweep(self, session: Session) -> dict:
         """Run all timeout checks in a single pass. Returns counts by category."""
         expired_held = self.expire_stale_held(session)
         expired_disputes = self.expire_stale_disputes(session)
+        defaulted_evidence = self.expire_evidence_windows(session)
         warned = self.warn_expiring_soon(session)
         return {
             "expired_held": expired_held,
             "expired_disputes": expired_disputes,
+            "defaulted_evidence": defaulted_evidence,
             "warned": warned,
         }

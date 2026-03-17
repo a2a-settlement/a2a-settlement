@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json as _json
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_CEILING, Decimal
@@ -12,11 +14,12 @@ from sqlalchemy.orm import Session
 from exchange.auth import authenticate_bot
 from exchange.config import get_session, settings
 from exchange.ratelimit import limiter
-from exchange.models import Account, Balance, Escrow, Transaction
+from exchange.models import Account, Balance, Escrow, EvidenceSubmission, Transaction
 from exchange.schemas import (
     BalanceResponse,
     BatchEscrowRequest,
     BatchEscrowResponse,
+    ComplianceBundleResponse,
     DeliverRequest,
     DeliverResponse,
     DepositRequest,
@@ -27,6 +30,9 @@ from exchange.schemas import (
     EscrowListResponse,
     EscrowRequest,
     EscrowResponse,
+    EvidenceListResponse,
+    EvidenceSubmissionResponse,
+    MAX_INLINE_EVIDENCE_BYTES,
     PartialReleaseRequest,
     PartialReleaseResponse,
     RefundRequest,
@@ -36,6 +42,7 @@ from exchange.schemas import (
     ResolveRefundResponse,
     ResolveReleaseResponse,
     ResolveRequest,
+    SubmitEvidenceRequest,
     TransactionItem,
     TransactionsResponse,
     VIAttestation,
@@ -91,6 +98,10 @@ def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
         ),
         status=escrow.status,
         dispute_reason=escrow.dispute_reason,
+        dispute_filed_by=escrow.dispute_filed_by,
+        dispute_stake_amount=int(escrow.dispute_stake_amount) if escrow.dispute_stake_amount else None,
+        dispute_stake_status=escrow.dispute_stake_status,
+        evidence_window_closes_at=escrow.evidence_window_closes_at,
         resolution_strategy=escrow.resolution_strategy,
         expires_at=escrow.expires_at,
         task_id=escrow.task_id,
@@ -267,6 +278,66 @@ def _extract_domain(uri: str) -> str:
         return urlparse(uri).netloc
     except Exception:
         return uri
+
+
+def _settle_dispute_stake(
+    session: Session, escrow: Escrow, ruling: str | None
+) -> None:
+    """Return or forfeit the dispute stake based on the mediator's ruling."""
+    stake = escrow.dispute_stake_amount
+    filer = escrow.dispute_filed_by
+    if not stake or not filer or escrow.dispute_stake_status != "held":
+        return
+
+    counterparty = (
+        escrow.provider_id if filer == escrow.requester_id else escrow.requester_id
+    )
+
+    filer_bal = session.execute(
+        _lock(select(Balance).where(Balance.account_id == filer))
+    ).scalar_one_or_none()
+
+    if ruling == "forfeit" and filer_bal is not None:
+        filer_bal.held_in_escrow -= stake
+        session.add(filer_bal)
+
+        counter_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == counterparty))
+        ).scalar_one_or_none()
+        if counter_bal is not None:
+            counter_bal.available += stake
+            counter_bal.total_earned += stake
+            session.add(counter_bal)
+
+        session.add(
+            Transaction(
+                escrow_id=escrow.id,
+                from_account=filer,
+                to_account=counterparty,
+                amount=stake,
+                tx_type="dispute_stake_forfeit",
+                description="Dispute stake forfeited to counterparty",
+            )
+        )
+        escrow.dispute_stake_status = "forfeited"
+    elif filer_bal is not None:
+        filer_bal.held_in_escrow -= stake
+        filer_bal.available += stake
+        session.add(filer_bal)
+
+        session.add(
+            Transaction(
+                escrow_id=escrow.id,
+                from_account=None,
+                to_account=filer,
+                amount=stake,
+                tx_type="dispute_stake_return",
+                description="Dispute stake returned",
+            )
+        )
+        escrow.dispute_stake_status = "returned"
+
+    session.add(escrow)
 
 
 def _apply_provenance_reputation_penalty(
@@ -1034,6 +1105,15 @@ def dispute(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> DisputeResponse:
+    if req.stake_amount < settings.dispute_stake_min:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Dispute stake must be at least {settings.dispute_stake_min} ATE",
+        )
+
+    now = _now()
+    evidence_window_closes = now + timedelta(hours=settings.evidence_window_hours)
+
     with session.begin():
         escrow = session.execute(
             _lock(select(Escrow).where(Escrow.id == req.escrow_id))
@@ -1051,29 +1131,59 @@ def dispute(
                 detail=f"Escrow cannot be disputed (status: {escrow.status})",
             )
 
-        escrow.status = "disputed"
+        disputer_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == current["id"]))
+        ).scalar_one_or_none()
+        if disputer_bal is None or disputer_bal.available < req.stake_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient balance for dispute stake",
+            )
+
+        disputer_bal.available -= req.stake_amount
+        disputer_bal.held_in_escrow += req.stake_amount
+        session.add(disputer_bal)
+
+        session.add(
+            Transaction(
+                escrow_id=escrow.id,
+                from_account=current["id"],
+                to_account=None,
+                amount=req.stake_amount,
+                tx_type="dispute_stake_hold",
+                description="Dispute stake held pending resolution",
+            )
+        )
+
+        escrow.status = "evidence_pending"
         escrow.dispute_reason = req.reason
-        escrow.dispute_expires_at = _now() + timedelta(
+        escrow.dispute_filed_by = current["id"]
+        escrow.dispute_stake_amount = req.stake_amount
+        escrow.dispute_stake_status = "held"
+        escrow.evidence_window_closes_at = evidence_window_closes
+        escrow.dispute_expires_at = evidence_window_closes + timedelta(
             minutes=settings.dispute_ttl_minutes
         )
         session.add(escrow)
 
     fire_webhook_event(session, escrow, "escrow.disputed")
-    fire_webhook_event(session, escrow, "escrow.dispute_pending_mediation")
+    fire_webhook_event(session, escrow, "escrow.evidence_window_opened")
     log_settlement_event(
         escrow_id=req.escrow_id,
         event_type="escrow.disputed",
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
         amount=int(escrow.amount),
-        status="disputed",
+        status="evidence_pending",
         dispute_reason=req.reason,
     )
 
     return DisputeResponse(
         escrow_id=req.escrow_id,
-        status="disputed",
+        status="evidence_pending",
         reason=req.reason,
+        stake_amount=req.stake_amount,
+        evidence_window_closes_at=evidence_window_closes,
     )
 
 
@@ -1101,16 +1211,20 @@ def resolve(
         ).scalar_one_or_none()
         if escrow is None:
             raise HTTPException(status_code=404, detail="Escrow not found")
-        if escrow.status != "disputed":
+        if escrow.status not in ("disputed", "evidence_pending"):
             raise HTTPException(
                 status_code=400,
-                detail=f"Escrow is not disputed (status: {escrow.status})",
+                detail=f"Escrow is not in a disputable state (status: {escrow.status})",
             )
 
         escrow.resolution_strategy = req.strategy
         if req.provenance_result:
             escrow.provenance_result = req.provenance_result
+        if req.mediator_context:
+            escrow.mediator_context = req.mediator_context
         total_held = int(escrow.amount + escrow.fee_amount)
+
+        _settle_dispute_stake(session, escrow, req.stake_ruling)
 
         if req.resolution == "release":
             requester_bal = session.execute(
@@ -1599,4 +1713,261 @@ def get_vi_attestation(
     return VIAttestation(
         type="urn:a2a-settlement:ema-reputation:v1",
         value=value_payload,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Evidence Submission
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/exchange/escrow/{escrow_id}/evidence",
+    response_model=EvidenceSubmissionResponse,
+    tags=["Evidence"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def submit_evidence(
+    request: Request,
+    escrow_id: str,
+    req: SubmitEvidenceRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> EvidenceSubmissionResponse:
+    now = _now()
+    with session.begin():
+        escrow = session.execute(
+            _lock(select(Escrow).where(Escrow.id == escrow_id))
+        ).scalar_one_or_none()
+        if escrow is None:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        if current["id"] not in (escrow.requester_id, escrow.provider_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Only the requester or provider can submit evidence",
+            )
+        if escrow.status != "evidence_pending":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Evidence cannot be submitted (status: {escrow.status})",
+            )
+        if escrow.evidence_window_closes_at and now > escrow.evidence_window_closes_at:
+            raise HTTPException(
+                status_code=400, detail="Evidence window has closed"
+            )
+
+        for artifact in req.artifacts:
+            if artifact.artifact_type == "inline":
+                if not artifact.content:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Inline artifact must include content",
+                    )
+                if len(artifact.content.encode("utf-8")) > settings.max_inline_evidence_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Inline artifact exceeds {settings.max_inline_evidence_bytes} byte limit",
+                    )
+                computed = hashlib.sha256(artifact.content.encode("utf-8")).hexdigest()
+                if computed != artifact.content_hash:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Artifact content_hash does not match inline content",
+                    )
+            elif artifact.artifact_type == "uri":
+                if not artifact.uri:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="URI artifact must include uri field",
+                    )
+
+        bundle_json = _json.dumps(
+            [a.model_dump() for a in req.artifacts], sort_keys=True
+        )
+        content_hash = hashlib.sha256(bundle_json.encode("utf-8")).hexdigest()
+
+        submission = EvidenceSubmission(
+            escrow_id=escrow_id,
+            submitter_id=current["id"],
+            evidence_type=req.evidence_type.value,
+            summary=req.summary,
+            artifacts=[a.model_dump() for a in req.artifacts],
+            encrypted=req.encrypted,
+            encryption_key_id=req.encryption_key_id,
+            content_hash=content_hash,
+            attestor_id=req.attestor_id,
+            attestor_signature=req.attestor_signature,
+        )
+        session.add(submission)
+        session.flush()
+        sub_id = submission.id
+
+    fire_webhook_event(session, escrow, "escrow.evidence_submitted")
+    log_settlement_event(
+        escrow_id=escrow_id,
+        event_type="escrow.evidence_submitted",
+        requester_id=escrow.requester_id,
+        provider_id=escrow.provider_id,
+        amount=int(escrow.amount),
+        status=escrow.status,
+    )
+
+    return EvidenceSubmissionResponse(
+        id=sub_id,
+        escrow_id=escrow_id,
+        submitter_id=current["id"],
+        evidence_type=req.evidence_type.value,
+        summary=req.summary,
+        artifact_count=len(req.artifacts),
+        encrypted=req.encrypted,
+        submitted_at=now,
+    )
+
+
+@router.get(
+    "/exchange/escrow/{escrow_id}/evidence",
+    response_model=EvidenceListResponse,
+    tags=["Evidence"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def list_evidence(
+    request: Request,
+    escrow_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> EvidenceListResponse:
+    with session.begin():
+        escrow = session.execute(
+            select(Escrow).where(Escrow.id == escrow_id)
+        ).scalar_one_or_none()
+        if escrow is None:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        if (
+            current["id"] not in (escrow.requester_id, escrow.provider_id)
+            and current.get("status") != "operator"
+        ):
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+        rows = (
+            session.execute(
+                select(EvidenceSubmission)
+                .where(EvidenceSubmission.escrow_id == escrow_id)
+                .order_by(EvidenceSubmission.submitted_at)
+            )
+            .scalars()
+            .all()
+        )
+
+    items = [
+        EvidenceSubmissionResponse(
+            id=r.id,
+            escrow_id=r.escrow_id,
+            submitter_id=r.submitter_id,
+            evidence_type=r.evidence_type,
+            summary=r.summary,
+            artifact_count=len(r.artifacts) if r.artifacts else 0,
+            encrypted=r.encrypted,
+            submitted_at=r.submitted_at,
+        )
+        for r in rows
+    ]
+    return EvidenceListResponse(evidence=items, total=len(items))
+
+
+# ---------------------------------------------------------------------------
+# Compliance Bundle
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/exchange/escrow/{escrow_id}/compliance-bundle",
+    response_model=ComplianceBundleResponse,
+    tags=["Evidence"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def compliance_bundle(
+    request: Request,
+    escrow_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> ComplianceBundleResponse:
+    with session.begin():
+        escrow = session.execute(
+            select(Escrow).where(Escrow.id == escrow_id)
+        ).scalar_one_or_none()
+        if escrow is None:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        if (
+            current["id"] not in (escrow.requester_id, escrow.provider_id)
+            and current.get("status") != "operator"
+        ):
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+        evidence_rows = (
+            session.execute(
+                select(EvidenceSubmission)
+                .where(EvidenceSubmission.escrow_id == escrow_id)
+                .order_by(EvidenceSubmission.submitted_at)
+            )
+            .scalars()
+            .all()
+        )
+
+    contract = {
+        "escrow_id": escrow.id,
+        "requester_id": escrow.requester_id,
+        "provider_id": escrow.provider_id,
+        "amount": int(escrow.amount),
+        "fee_amount": int(escrow.fee_amount),
+        "status": escrow.status,
+        "task_id": escrow.task_id,
+        "task_type": escrow.task_type,
+        "deliverables": escrow.deliverables,
+        "dispute_reason": escrow.dispute_reason,
+        "dispute_filed_by": escrow.dispute_filed_by,
+        "dispute_stake_amount": int(escrow.dispute_stake_amount) if escrow.dispute_stake_amount else None,
+        "dispute_stake_status": escrow.dispute_stake_status,
+        "resolution_strategy": escrow.resolution_strategy,
+        "created_at": escrow.created_at.isoformat() if escrow.created_at else None,
+        "resolved_at": escrow.resolved_at.isoformat() if escrow.resolved_at else None,
+    }
+
+    evidence_list = [
+        {
+            "id": e.id,
+            "submitter_id": e.submitter_id,
+            "evidence_type": e.evidence_type,
+            "summary": e.summary,
+            "artifacts": e.artifacts,
+            "encrypted": e.encrypted,
+            "content_hash": e.content_hash,
+            "attestor_id": e.attestor_id,
+            "submitted_at": e.submitted_at.isoformat() if e.submitted_at else None,
+        }
+        for e in evidence_rows
+    ]
+
+    mediator_rationale = None
+    if escrow.provenance_result:
+        mediator_rationale = escrow.provenance_result
+
+    merkle_proof = None
+    if settings.compliance_enabled:
+        try:
+            from compliance.merkle import MerkleTree
+
+            tree = MerkleTree()
+            root = tree.root_hash
+            merkle_proof = {"root_hash": root, "leaf_count": tree.leaf_count}
+        except Exception:
+            pass
+
+    return ComplianceBundleResponse(
+        escrow_id=escrow_id,
+        contract=contract,
+        evidence_submissions=evidence_list,
+        mediator_rationale=mediator_rationale,
+        mediator_context=escrow.mediator_context,
+        merkle_proof=merkle_proof,
+        exported_at=_now(),
     )

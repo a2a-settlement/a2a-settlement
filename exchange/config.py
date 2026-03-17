@@ -104,6 +104,13 @@ class Settings:
         "A2A_EXCHANGE_SETTLEMENT_AUTH_AUDIENCE", "https://exchange.a2a-settlement.org"
     )
 
+    # Evidence API
+    evidence_window_hours: int = _get_int("A2A_EXCHANGE_EVIDENCE_WINDOW_HOURS", 72)
+    dispute_stake_min: int = _get_int("A2A_EXCHANGE_DISPUTE_STAKE_MIN", 10)
+    max_inline_evidence_bytes: int = _get_int(
+        "A2A_EXCHANGE_MAX_INLINE_EVIDENCE_BYTES", 5 * 1024 * 1024
+    )
+
     # Compliance audit (Merkle tree)
     compliance_enabled: bool = _get_bool("A2A_EXCHANGE_COMPLIANCE_ENABLED", False)
 

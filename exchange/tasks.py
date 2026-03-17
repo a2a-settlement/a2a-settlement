@@ -58,12 +58,25 @@ def run_expiry_sweep() -> dict:
                 status="expired",
                 dispute_reason=escrow.dispute_reason,
             )
+        for escrow in results["defaulted_evidence"]:
+            fire_webhook_event(session, escrow, "escrow.evidence_window_expired")
+            fire_webhook_event(session, escrow, "escrow.default_judgment")
+            log_settlement_event(
+                escrow_id=escrow.id,
+                event_type="escrow.default_judgment",
+                requester_id=escrow.requester_id,
+                provider_id=escrow.provider_id,
+                amount=int(escrow.amount),
+                status=escrow.status,
+                dispute_reason=escrow.dispute_reason,
+            )
         for escrow in results["warned"]:
             fire_webhook_event(session, escrow, "escrow.expiring_soon")
 
         return {
             "expired_held": len(results["expired_held"]),
             "expired_disputes": len(results["expired_disputes"]),
+            "defaulted_evidence": len(results["defaulted_evidence"]),
             "warned": len(results["warned"]),
         }
     finally:
@@ -85,6 +98,11 @@ async def background_expiry_loop() -> None:
                     total_expired,
                     counts["expired_held"],
                     counts["expired_disputes"],
+                )
+            if counts["defaulted_evidence"]:
+                logger.info(
+                    "Background sweep applied %d default judgment(s) from evidence window expiry",
+                    counts["defaulted_evidence"],
                 )
             if counts["warned"]:
                 logger.info("Background sweep sent %d expiry warning(s)", counts["warned"])

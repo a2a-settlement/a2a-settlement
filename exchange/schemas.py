@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -251,12 +252,74 @@ class RefundResponse(BaseModel):
 class DisputeRequest(BaseModel):
     escrow_id: str
     reason: str
+    stake_amount: int = Field(..., gt=0)
 
 
 class DisputeResponse(BaseModel):
     escrow_id: str
-    status: str = "disputed"
+    status: str = "evidence_pending"
     reason: str
+    stake_amount: int = 0
+    evidence_window_closes_at: datetime | None = None
+
+
+# --- Evidence ---
+
+
+class EvidenceType(str, Enum):
+    COMPUTE = "compute"
+    CONTENT = "content"
+    SERVICE = "service"
+    BOUNTY = "bounty"
+    THIRD_PARTY_ATTESTATION = "third_party_attestation"
+
+
+MAX_INLINE_EVIDENCE_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+class EvidenceArtifact(BaseModel):
+    artifact_type: Literal["inline", "uri"]
+    content: str | None = None
+    uri: str | None = None
+    content_hash: str = Field(..., min_length=64, max_length=64)
+    mime_type: str | None = None
+
+
+class SubmitEvidenceRequest(BaseModel):
+    evidence_type: EvidenceType
+    summary: str = Field(..., min_length=1, max_length=4096)
+    artifacts: list[EvidenceArtifact] = []
+    encrypted: bool = False
+    encryption_key_id: str | None = None
+    attestor_id: str | None = None
+    attestor_signature: str | None = None
+
+
+class EvidenceSubmissionResponse(BaseModel):
+    id: str
+    escrow_id: str
+    submitter_id: str
+    evidence_type: str
+    summary: str
+    artifact_count: int
+    encrypted: bool = False
+    submitted_at: datetime
+
+
+class EvidenceListResponse(BaseModel):
+    evidence: list[EvidenceSubmissionResponse]
+    total: int
+
+
+class ComplianceBundleResponse(BaseModel):
+    escrow_id: str
+    contract: dict
+    evidence_submissions: list[dict]
+    mediator_rationale: dict | None = None
+    mediator_context: dict | None = None
+    merkle_proof: dict | None = None
+    rfc3161_timestamp: str | None = None
+    exported_at: datetime
 
 
 class DeliverRequest(BaseModel):
@@ -294,6 +357,8 @@ class ResolveRequest(BaseModel):
     resolution: str
     strategy: str | None = None
     provenance_result: dict | None = None
+    mediator_context: dict | None = None
+    stake_ruling: Literal["return", "forfeit"] | None = None
 
 
 class ResolveReleaseResponse(BaseModel):
@@ -348,6 +413,10 @@ class EscrowDetailResponse(BaseModel):
     effective_fee_percent: float
     status: str
     dispute_reason: str | None = None
+    dispute_filed_by: str | None = None
+    dispute_stake_amount: int | None = None
+    dispute_stake_status: str | None = None
+    evidence_window_closes_at: datetime | None = None
     resolution_strategy: str | None = None
     expires_at: datetime
     task_id: str | None = None
