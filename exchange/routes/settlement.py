@@ -32,7 +32,10 @@ from exchange.schemas import (
     EscrowResponse,
     EvidenceListResponse,
     EvidenceSubmissionResponse,
+    InstantSettleRequest,
+    InstantSettleResponse,
     MAX_INLINE_EVIDENCE_BYTES,
+    OracleEvidenceSubmissionResponse,
     PartialReleaseRequest,
     PartialReleaseResponse,
     RefundRequest,
@@ -43,6 +46,7 @@ from exchange.schemas import (
     ResolveReleaseResponse,
     ResolveRequest,
     SubmitEvidenceRequest,
+    SubmitOracleEvidenceRequest,
     TransactionItem,
     TransactionsResponse,
     VIAttestation,
@@ -478,6 +482,149 @@ def deposit(
         currency=req.currency,
         new_balance=int(bal.available),
         reference=req.reference,
+    )
+
+
+@router.post(
+    "/exchange/instant-settle",
+    status_code=200,
+    response_model=InstantSettleResponse,
+    tags=["Settlement"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def instant_settle(
+    request: Request,
+    req: InstantSettleRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> InstantSettleResponse:
+    """Atomic single-call settlement for synchronous micro-transactions.
+
+    Skips the escrow lifecycle entirely — funds move directly from requester
+    to provider in one DB transaction.  Only available to agents whose EMA
+    reputation score is at or above ``INSTANT_SETTLE_MIN_REPUTATION``
+    (default 0.65, ~4 successful escrow releases from the 0.5 baseline).
+    The WORM audit trail still fires so compliance coverage is identical to
+    the escrow path.
+    """
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+    if req.amount > settings.instant_settle_max_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Instant settle amount cannot exceed {settings.instant_settle_max_amount}",
+        )
+    if current["id"] == req.provider_id:
+        raise HTTPException(status_code=400, detail="Cannot settle to yourself")
+
+    fee_amount = _fee_amount(req.amount)
+    total_cost = req.amount + fee_amount
+
+    with session.begin():
+        requester_acct = session.execute(
+            _lock(select(Account).where(Account.id == current["id"]))
+        ).scalar_one_or_none()
+        if requester_acct is None:
+            raise HTTPException(status_code=404, detail="Requester account not found")
+
+        if float(requester_acct.reputation) < settings.instant_settle_min_reputation:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Instant settlement requires a minimum reputation of "
+                    f"{settings.instant_settle_min_reputation:.2f}. "
+                    f"Current reputation: {float(requester_acct.reputation):.2f}. "
+                    "Build reputation through successful escrow transactions."
+                ),
+            )
+
+        provider_acct = session.execute(
+            select(Account).where(Account.id == req.provider_id)
+        ).scalar_one_or_none()
+        if provider_acct is None:
+            raise HTTPException(status_code=404, detail="Provider account not found")
+        if provider_acct.status != "active":
+            raise HTTPException(status_code=400, detail="Provider account is not active")
+
+        kya_gate = _check_kya_gate(session, current["id"], req.provider_id, req.amount)
+        if not kya_gate["allowed"]:
+            raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
+
+        requester_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == current["id"]))
+        ).scalar_one_or_none()
+        if requester_bal is None:
+            raise HTTPException(status_code=404, detail="Requester balance not found")
+        if requester_bal.available < total_cost:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient balance. Need {total_cost} ({req.amount} + {fee_amount} fee), have {requester_bal.available}",
+            )
+
+        provider_bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == req.provider_id))
+        ).scalar_one_or_none()
+        if provider_bal is None:
+            raise HTTPException(status_code=404, detail="Provider balance not found")
+
+        _check_spending_limits(session, current["id"], total_cost)
+
+        now = _now()
+        tx_id = str(uuid.uuid4())
+
+        requester_bal.available -= total_cost
+        requester_bal.total_spent += total_cost
+        session.add(requester_bal)
+
+        provider_bal.available += req.amount
+        provider_bal.total_earned += req.amount
+        session.add(provider_bal)
+
+        session.add(
+            Transaction(
+                id=tx_id,
+                escrow_id=None,
+                from_account=current["id"],
+                to_account=req.provider_id,
+                amount=req.amount,
+                tx_type="instant_settlement",
+                description=req.description or f"Instant settle: {req.task_type or req.task_id or 'unspecified'}",
+            )
+        )
+        if fee_amount > 0:
+            session.add(
+                Transaction(
+                    escrow_id=None,
+                    from_account=current["id"],
+                    to_account=None,
+                    amount=fee_amount,
+                    tx_type="fee",
+                    description="Platform fee (instant settlement)",
+                )
+            )
+
+        provider_acct.reputation = min(1.0, float(provider_acct.reputation) * 0.9 + 1.0 * 0.1)
+        session.add(provider_acct)
+
+    log_settlement_event(
+        escrow_id=tx_id,
+        event_type="instant.settled",
+        requester_id=current["id"],
+        provider_id=req.provider_id,
+        amount=req.amount,
+        status="settled",
+    )
+
+    return InstantSettleResponse(
+        transaction_id=tx_id,
+        requester_id=current["id"],
+        provider_id=req.provider_id,
+        amount=req.amount,
+        fee_amount=fee_amount,
+        effective_fee_percent=_effective_fee_percent(req.amount, fee_amount),
+        new_balance=int(requester_bal.available),
+        task_id=req.task_id,
+        settled_at=now,
     )
 
 
@@ -1826,6 +1973,8 @@ def submit_evidence(
         summary=req.summary,
         artifact_count=len(req.artifacts),
         encrypted=req.encrypted,
+        source_type="party",
+        oracle_id=None,
         submitted_at=now,
     )
 
@@ -1873,11 +2022,142 @@ def list_evidence(
             summary=r.summary,
             artifact_count=len(r.artifacts) if r.artifacts else 0,
             encrypted=r.encrypted,
+            source_type=r.source_type,
+            oracle_id=r.oracle_id,
             submitted_at=r.submitted_at,
         )
         for r in rows
     ]
     return EvidenceListResponse(evidence=items, total=len(items))
+
+
+# ---------------------------------------------------------------------------
+# Oracle Evidence Submission
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/exchange/escrow/{escrow_id}/oracle-evidence",
+    response_model=OracleEvidenceSubmissionResponse,
+    tags=["Evidence"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def submit_oracle_evidence(
+    request: Request,
+    escrow_id: str,
+    req: SubmitOracleEvidenceRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> OracleEvidenceSubmissionResponse:
+    """Submit third-party corroborating evidence from a registered oracle account.
+
+    Oracle evidence is labelled ``source_type="oracle"`` in the evidence store
+    so the AI mediator can weight it independently from self-reported party
+    evidence.  Only accounts with ``is_oracle=True`` and reputation >=
+    ``ORACLE_MIN_REPUTATION`` (default 0.6) may submit via this endpoint.
+    Oracle accounts can submit evidence while the escrow is in either
+    ``evidence_pending`` or ``disputed`` state.
+    """
+    now = _now()
+
+    with session.begin():
+        oracle_acct = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if oracle_acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if not oracle_acct.is_oracle:
+            raise HTTPException(
+                status_code=403,
+                detail="Only registered oracle accounts can submit oracle evidence",
+            )
+        if float(oracle_acct.reputation) < settings.oracle_min_reputation:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Oracle account reputation {float(oracle_acct.reputation):.2f} is below "
+                    f"the minimum required {settings.oracle_min_reputation:.2f}"
+                ),
+            )
+
+        escrow = session.execute(
+            _lock(select(Escrow).where(Escrow.id == escrow_id))
+        ).scalar_one_or_none()
+        if escrow is None:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        if escrow.status not in ("evidence_pending", "disputed"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Oracle evidence cannot be submitted for escrow in status: {escrow.status}",
+            )
+
+        for artifact in req.artifacts:
+            if artifact.artifact_type == "inline":
+                if not artifact.content:
+                    raise HTTPException(
+                        status_code=400, detail="Inline artifact must include content"
+                    )
+                if len(artifact.content.encode("utf-8")) > settings.max_inline_evidence_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Inline artifact exceeds {settings.max_inline_evidence_bytes} byte limit",
+                    )
+                computed = hashlib.sha256(artifact.content.encode("utf-8")).hexdigest()
+                if computed != artifact.content_hash:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Artifact content_hash does not match inline content",
+                    )
+            elif artifact.artifact_type == "uri":
+                if not artifact.uri:
+                    raise HTTPException(
+                        status_code=400, detail="URI artifact must include uri field"
+                    )
+
+        bundle_json = _json.dumps(
+            [a.model_dump() for a in req.artifacts], sort_keys=True
+        )
+        content_hash = hashlib.sha256(bundle_json.encode("utf-8")).hexdigest()
+
+        submission = EvidenceSubmission(
+            escrow_id=escrow_id,
+            submitter_id=current["id"],
+            evidence_type=req.evidence_type.value,
+            summary=req.summary,
+            artifacts=[a.model_dump() for a in req.artifacts],
+            encrypted=False,
+            content_hash=content_hash,
+            attestor_id=current["id"],
+            attestor_signature=req.attestor_signature,
+            source_type="oracle",
+            oracle_id=current["id"],
+        )
+        session.add(submission)
+        session.flush()
+        sub_id = submission.id
+
+    fire_webhook_event(session, escrow, "escrow.evidence_submitted")
+    log_settlement_event(
+        escrow_id=escrow_id,
+        event_type="escrow.oracle_evidence_submitted",
+        requester_id=escrow.requester_id,
+        provider_id=escrow.provider_id,
+        amount=int(escrow.amount),
+        status=escrow.status,
+    )
+
+    return OracleEvidenceSubmissionResponse(
+        id=sub_id,
+        escrow_id=escrow_id,
+        submitter_id=current["id"],
+        evidence_type=req.evidence_type.value,
+        summary=req.summary,
+        artifact_count=len(req.artifacts),
+        encrypted=False,
+        source_type="oracle",
+        oracle_id=current["id"],
+        submitted_at=now,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1948,6 +2228,8 @@ def compliance_bundle(
             "encrypted": e.encrypted,
             "content_hash": e.content_hash,
             "attestor_id": e.attestor_id,
+            "source_type": e.source_type,
+            "oracle_id": e.oracle_id,
             "submitted_at": e.submitted_at.isoformat() if e.submitted_at else None,
         }
         for e in evidence_rows

@@ -515,6 +515,75 @@ def update_agent_card(
     )
 
 
+@router.post("/accounts/admin/register-oracle", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def register_oracle(
+    request: Request,
+    req: dict,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Grant oracle status to an existing registered account (operator-only).
+
+    Oracle accounts can submit third-party evidence via
+    ``POST /exchange/escrow/{id}/oracle-evidence``.  The account must already
+    be registered and active.  Oracle reputation starts at the same EMA default
+    (0.5) and must reach the ``oracle_min_reputation`` threshold (0.6) before
+    the evidence endpoint will accept submissions.
+
+    Request body: ``{"account_id": "<id>"}``
+    """
+    if current.get("status") != "operator":
+        raise HTTPException(status_code=403, detail="Only the exchange operator can grant oracle status")
+
+    account_id = req.get("account_id") if isinstance(req, dict) else None
+    if not account_id:
+        raise HTTPException(status_code=422, detail="account_id is required")
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if acct.status != "active":
+            raise HTTPException(status_code=400, detail="Only active accounts can be granted oracle status")
+        acct.is_oracle = True
+        session.add(acct)
+
+    return {
+        "account_id": acct.id,
+        "bot_name": acct.bot_name,
+        "is_oracle": True,
+        "status": "oracle_granted",
+    }
+
+
+@router.delete("/accounts/admin/revoke-oracle/{account_id}", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def revoke_oracle(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Revoke oracle status from an account (operator-only)."""
+    if current.get("status") != "operator":
+        raise HTTPException(status_code=403, detail="Only the exchange operator can revoke oracle status")
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        acct.is_oracle = False
+        session.add(acct)
+
+    return {
+        "account_id": acct.id,
+        "bot_name": acct.bot_name,
+        "is_oracle": False,
+        "status": "oracle_revoked",
+    }
+
+
 @router.get(
     "/accounts/{account_id}/verification",
     response_model=VerificationStatusResponse,

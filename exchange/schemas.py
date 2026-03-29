@@ -342,6 +342,29 @@ class DisputeResponse(BaseModel):
     evidence_window_closes_at: datetime | None = None
 
 
+# --- Instant Settlement ---
+
+
+class InstantSettleRequest(BaseModel):
+    provider_id: str
+    amount: int = Field(..., gt=0)
+    task_id: str | None = None
+    task_type: str | None = None
+    description: str | None = None
+
+
+class InstantSettleResponse(BaseModel):
+    transaction_id: str
+    requester_id: str
+    provider_id: str
+    amount: int
+    fee_amount: int
+    effective_fee_percent: float
+    new_balance: int
+    task_id: str | None = None
+    settled_at: datetime
+
+
 # --- Evidence ---
 
 
@@ -374,6 +397,13 @@ class SubmitEvidenceRequest(BaseModel):
     attestor_signature: str | None = None
 
 
+class SubmitOracleEvidenceRequest(BaseModel):
+    evidence_type: EvidenceType
+    summary: str = Field(..., min_length=1, max_length=4096)
+    artifacts: list[EvidenceArtifact] = []
+    attestor_signature: str | None = None
+
+
 class EvidenceSubmissionResponse(BaseModel):
     id: str
     escrow_id: str
@@ -382,7 +412,13 @@ class EvidenceSubmissionResponse(BaseModel):
     summary: str
     artifact_count: int
     encrypted: bool = False
+    source_type: str = "party"
+    oracle_id: str | None = None
     submitted_at: datetime
+
+
+class OracleEvidenceSubmissionResponse(EvidenceSubmissionResponse):
+    source_type: str = "oracle"
 
 
 class EvidenceListResponse(BaseModel):

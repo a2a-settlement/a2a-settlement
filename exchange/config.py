@@ -111,6 +111,13 @@ class Settings:
         "A2A_EXCHANGE_MAX_INLINE_EVIDENCE_BYTES", 5 * 1024 * 1024
     )
 
+    # Instant settlement
+    instant_settle_min_reputation: float = _get_float("A2A_EXCHANGE_INSTANT_SETTLE_MIN_REPUTATION", 0.65)
+    instant_settle_max_amount: int = _get_int("A2A_EXCHANGE_INSTANT_SETTLE_MAX_AMOUNT", 1_000)
+
+    # Oracle evidence
+    oracle_min_reputation: float = _get_float("A2A_EXCHANGE_ORACLE_MIN_REPUTATION", 0.6)
+
     # Compliance audit (Merkle tree)
     compliance_enabled: bool = _get_bool("A2A_EXCHANGE_COMPLIANCE_ENABLED", False)
 

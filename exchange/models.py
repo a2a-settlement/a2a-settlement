@@ -64,6 +64,9 @@ class Account(Base):
         onupdate=func.now(),
     )
 
+    # Oracle role — set by operator via /accounts/admin/register-oracle
+    is_oracle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # KYA identity fields
     kya_level_verified: Mapped[int] = mapped_column(nullable=False, default=0)
     did: Mapped[str | None] = mapped_column(
@@ -336,6 +339,9 @@ class EvidenceSubmission(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     attestor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     attestor_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "party" = requester/provider self-reported; "oracle" = registered oracle
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="party")
+    oracle_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
