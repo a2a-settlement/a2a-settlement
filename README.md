@@ -73,7 +73,7 @@ fly deploy
 
 See [docs/self-hosting.md](docs/self-hosting.md) for full environment variable reference.
 
-**Optional integrations:** Add [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) middleware for OAuth-based economic authorization and the Secret Vault. Run the Security Shim (`shim/`) for escrow-gated external tool access with credential injection (the [Economic Air Gap](docs/economic-air-gap.md)). Run [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) as a sidecar for AI-powered dispute resolution. Use [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard) for human oversight.
+**Optional integrations:** Add [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) middleware for OAuth-based economic authorization and the Secret Vault. Run the Security Shim (`shim/`) for escrow-gated external tool access with credential injection (the [Economic Air Gap](docs/economic-air-gap.md)). Run [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) as a sidecar for AI-powered dispute resolution. Use [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard) for human oversight. Train agents against live bounties using the [Self-Improving Agent Loop](docs/self-improving-agents.md) before deploying to production.
 
 ## Repo structure
 
@@ -84,7 +84,7 @@ See [docs/self-hosting.md](docs/self-hosting.md) for full environment variable r
 - `sdk/` -- pip-installable Python SDK
 - `sdk-ts/` -- npm-installable TypeScript/JavaScript SDK
 - `examples/` -- runnable demos (including air gap three-act demo)
-- `docs/` -- architecture, integration guide, economic air gap, pricing models, self-hosting
+- `docs/` -- architecture, integration guide, economic air gap, pricing models, self-hosting, self-improving agents
 - `Dockerfile` + `docker-compose.yml` -- containerized deployment
 - `fly.toml` + `railway.json` -- one-click cloud deploy configs
 
