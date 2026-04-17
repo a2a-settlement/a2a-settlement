@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 
@@ -7,7 +8,7 @@ from fastapi import HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from exchange.config import settings
+from exchange.config import client_ip_matches_register_trusted_rules, settings
 
 # ---------------------------------------------------------------------------
 # Global slowapi limiter (per-IP, in-memory)
@@ -24,7 +25,7 @@ limiter = Limiter(
 )
 
 # ---------------------------------------------------------------------------
-# Registration-specific rate limiter (stricter: 5/hour, 20/day per IP)
+# Registration-specific rate limiter (per-IP; env-tunable; optional trusted-IP bypass)
 # ---------------------------------------------------------------------------
 
 _lock = threading.Lock()
@@ -44,15 +45,48 @@ def _cleanup(now: float) -> None:
         del _hits[ip]
 
 
-def _count_since(timestamps: list[float], since: float) -> int:
+def _first_index_at_or_after(timestamps: list[float], threshold: float) -> int:
     lo, hi = 0, len(timestamps)
     while lo < hi:
         mid = (lo + hi) // 2
-        if timestamps[mid] < since:
+        if timestamps[mid] < threshold:
             lo = mid + 1
         else:
             hi = mid
-    return len(timestamps) - lo
+    return lo
+
+
+def _count_since(timestamps: list[float], since: float) -> int:
+    idx = _first_index_at_or_after(timestamps, since)
+    return len(timestamps) - idx
+
+
+def _retry_after_window_ends(timestamps: list[float], now: float, window_seconds: float) -> int:
+    """Seconds until the oldest hit in [now - window, now] expires (ceiling, at least 1)."""
+    idx = _first_index_at_or_after(timestamps, now - window_seconds)
+    if idx >= len(timestamps):
+        return 1
+    oldest = timestamps[idx]
+    return max(1, int(math.ceil(oldest + window_seconds - now)))
+
+
+def _register_rate_limit_exceeded(
+    *,
+    message: str,
+    limit_kind: str,
+    retry_after_seconds: int,
+) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail={
+            "error": "rate_limit_exceeded",
+            "message": message,
+            "limit": "registration",
+            "limit_kind": limit_kind,
+            "retry_after_seconds": retry_after_seconds,
+        },
+        headers={"Retry-After": str(retry_after_seconds)},
+    )
 
 
 def check_register_rate_limit(request: Request) -> None:
@@ -64,6 +98,9 @@ def check_register_rate_limit(request: Request) -> None:
         return
 
     ip = request.client.host if request.client else "unknown"
+    if client_ip_matches_register_trusted_rules(ip, settings.register_trusted_ip_rules):
+        return
+
     now = time.monotonic()
 
     with _lock:
@@ -71,17 +108,19 @@ def check_register_rate_limit(request: Request) -> None:
         timestamps = _hits.setdefault(ip, [])
 
         if hour_limit > 0 and _count_since(timestamps, now - 3600) >= hour_limit:
-            raise HTTPException(
-                status_code=429,
-                detail="Registration rate limit exceeded. Try again later.",
-                headers={"Retry-After": "3600"},
+            ra = _retry_after_window_ends(timestamps, now, 3600.0)
+            raise _register_rate_limit_exceeded(
+                message="Registration rate limit exceeded. Try again later.",
+                limit_kind="per_ip_per_hour",
+                retry_after_seconds=ra,
             )
 
         if day_limit > 0 and _count_since(timestamps, now - 86400) >= day_limit:
-            raise HTTPException(
-                status_code=429,
-                detail="Daily registration limit exceeded. Try again tomorrow.",
-                headers={"Retry-After": "86400"},
+            ra = _retry_after_window_ends(timestamps, now, 86400.0)
+            raise _register_rate_limit_exceeded(
+                message="Daily registration limit exceeded. Try again tomorrow.",
+                limit_kind="per_ip_per_day",
+                retry_after_seconds=ra,
             )
 
         timestamps.append(now)

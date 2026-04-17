@@ -62,6 +62,7 @@ router = APIRouter()
     tags=["Accounts"],
     dependencies=[Depends(check_register_rate_limit)],
 )
+@limiter.exempt
 def register(req: RegisterRequest, session: Session = Depends(get_session)) -> RegisterResponse:
     if settings.invite_code and req.invite_code != settings.invite_code:
         raise HTTPException(status_code=403, detail="Invalid or missing invite code")
@@ -339,6 +340,7 @@ def suspend_account(
     tags=["Accounts"],
     dependencies=[Depends(check_register_rate_limit)],
 )
+@limiter.exempt
 def register_agent(
     card_body: dict,
     session: Session = Depends(get_session),

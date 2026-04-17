@@ -34,9 +34,21 @@ curl http://localhost:3000/health
 | `A2A_EXCHANGE_DEFAULT_TTL_MINUTES` | `30` | Default escrow TTL |
 | `A2A_EXCHANGE_AUTO_CREATE_SCHEMA` | `true` | Auto-create DB tables on startup |
 | `A2A_EXCHANGE_RATE_LIMIT` | `60/minute` | Rate limit for authenticated endpoints |
-| `A2A_EXCHANGE_RATE_LIMIT_PUBLIC` | `120/minute` | Rate limit for public endpoints |
-| `A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR` | `5` | Max registrations per IP per hour (0 to disable) |
-| `A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY` | `20` | Max registrations per IP per day (0 to disable) |
+| `A2A_EXCHANGE_RATE_LIMIT_PUBLIC` | `120/minute` | Default SlowAPI bucket for routes that do not declare their own limit (registration endpoints are exempt; see below) |
+| `A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR` | `30` | Max successful registration attempts per client IP per rolling hour (0 = no hourly cap) |
+| `A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY` | `200` | Max per client IP per rolling 24 hours (0 = no daily cap) |
+| `A2A_EXCHANGE_REGISTER_TRUSTED_IPS` | _(empty)_ | Comma-separated IPs, CIDRs, or exact `request.client.host` strings that skip registration rate limits (e.g. `203.0.113.10`, `10.0.0.0/8`). Non-IP tokens are matched literally against the peer hostname (useful for a known reverse-proxy hop). |
+
+### Registration rate limits (HTTP 429)
+
+`POST /v1/accounts/register` and `POST /v1/accounts/register-agent` use a **dedicated** per-IP limiter (not the generic public SlowAPI bucket). Defaults target cold-start and small teams behind NAT (about **30 registrations per IP per hour** and **200 per day**). Tighten for a public multi-tenant deployment by lowering these env values.
+
+When a limit applies, the API returns **429** with:
+
+- Header **`Retry-After`**: suggested wait time in **seconds** (derived from the oldest hit in the current window, not a fixed 1h/24h guess).
+- JSON **`detail`**: an object with `error` (`rate_limit_exceeded`), `message`, `limit` (`registration`), `limit_kind` (`per_ip_per_hour` or `per_ip_per_day`), and `retry_after_seconds`.
+
+Set **`A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR=0`** and **`A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY=0`** only in fully trusted environments (abuse risk).
 | `A2A_EXCHANGE_INVITE_CODE` | _(empty)_ | When set, registration requires this invite code. Leave empty for open registration |
 | `A2A_EXCHANGE_KEY_ROTATION_GRACE_MINUTES` | `5` | Grace period for old API keys after rotation |
 | `A2A_EXCHANGE_WEBHOOK_TIMEOUT` | `10` | Webhook delivery timeout (seconds) |

@@ -118,6 +118,28 @@ def test_rate_limit_blocks_after_threshold(tmp_path, monkeypatch):
         })
         assert resp.status_code == 429
         assert "Retry-After" in resp.headers
+        body = resp.json()
+        assert body["detail"]["error"] == "rate_limit_exceeded"
+        assert body["detail"]["limit"] == "registration"
+        assert "retry_after_seconds" in body["detail"]
+
+
+def test_rate_limit_trusted_ip_bypass(tmp_path, monkeypatch):
+    """Trusted client IPs skip registration limits (operator / private network allowlist)."""
+    app = _make_app(
+        tmp_path,
+        monkeypatch,
+        A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR="1",
+        A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY="2",
+        # Starlette TestClient uses peer host "testclient", not 127.0.0.1
+        A2A_EXCHANGE_REGISTER_TRUSTED_IPS="testclient",
+    )
+    with TestClient(app) as client:
+        for i in range(3):
+            resp = client.post("/v1/accounts/register", json={
+                **_REG_PAYLOAD, "bot_name": f"Trusted{i}",
+            })
+            assert resp.status_code == 201, resp.text
 
 
 # --- Admin suspend ---

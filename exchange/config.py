@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Generator
 
@@ -28,6 +29,59 @@ def _get_bool(name: str, default: bool) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+RegisterTrustedRule = (
+    ipaddress.IPv4Address
+    | ipaddress.IPv6Address
+    | ipaddress.IPv4Network
+    | ipaddress.IPv6Network
+    | str
+)
+
+
+def parse_register_trusted_ip_rules(raw: str) -> list[RegisterTrustedRule]:
+    """Parse comma-separated IPs, CIDRs, or exact hostnames for registration rate-limit bypass.
+
+    Hostnames match ``request.client.host`` as-is (useful behind fixed proxies or in tests;
+    Starlette's TestClient uses the hostname ``testclient``).
+    """
+    rules: list[RegisterTrustedRule] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "/" in part:
+            rules.append(ipaddress.ip_network(part, strict=False))
+            continue
+        try:
+            rules.append(ipaddress.ip_address(part))
+        except ValueError:
+            rules.append(part)
+    return rules
+
+
+def client_ip_matches_register_trusted_rules(client_host: str, rules: list[RegisterTrustedRule]) -> bool:
+    if not rules:
+        return False
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address | None
+    try:
+        addr = ipaddress.ip_address(client_host)
+    except ValueError:
+        addr = None
+    for rule in rules:
+        if isinstance(rule, str):
+            if client_host == rule:
+                return True
+            continue
+        if addr is None:
+            continue
+        if isinstance(rule, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+            if addr in rule:
+                return True
+        elif addr == rule:
+            return True
+    return False
+
+
 class Settings:
     database_url: str = os.getenv("DATABASE_URL") or os.getenv("A2A_EXCHANGE_DATABASE_URL", "sqlite:///./a2a_exchange.db")
 
@@ -50,8 +104,13 @@ class Settings:
     # Rate limiting
     rate_limit_authenticated: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT", "60/minute")
     rate_limit_public: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT_PUBLIC", "120/minute")
-    register_rate_limit_per_hour: int = _get_int("A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR", 5)
-    register_rate_limit_per_day: int = _get_int("A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY", 20)
+    # Registration: separate per-IP limits (see docs/self-hosting.md). Defaults favor cold-start / lab NAT;
+    # tighten in untrusted public deployments via env.
+    register_rate_limit_per_hour: int = _get_int("A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR", 30)
+    register_rate_limit_per_day: int = _get_int("A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY", 200)
+    register_trusted_ip_rules: list[RegisterTrustedRule] = parse_register_trusted_ip_rules(
+        os.getenv("A2A_EXCHANGE_REGISTER_TRUSTED_IPS", "")
+    )
 
     # Invite code (empty = open registration)
     invite_code: str = os.getenv("A2A_EXCHANGE_INVITE_CODE", "")
