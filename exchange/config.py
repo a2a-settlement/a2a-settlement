@@ -102,6 +102,7 @@ class Settings:
     worker_timeout: int = _get_int("A2A_EXCHANGE_WORKER_TIMEOUT", 120)
 
     # Rate limiting
+    redis_url: str = os.getenv("A2A_EXCHANGE_REDIS_URL", "")
     rate_limit_authenticated: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT", "60/minute")
     rate_limit_public: str = os.getenv("A2A_EXCHANGE_RATE_LIMIT_PUBLIC", "120/minute")
     # Registration: separate per-IP limits (see docs/self-hosting.md). Defaults favor cold-start / lab NAT;
@@ -185,6 +186,15 @@ class Settings:
         "A2A_EXCHANGE_DIVERSITY_SWEEP_INTERVAL_SECONDS", 86400  # 24h
     )
     payment_graph_hops: int = _get_int("A2A_EXCHANGE_PAYMENT_GRAPH_HOPS", 2)
+
+    # Federation
+    federation_enabled: bool = _get_bool("A2A_EXCHANGE_FEDERATION_ENABLED", True)
+    federation_node_did: str = os.getenv("A2A_EXCHANGE_FEDERATION_NODE_DID", "")
+    federation_escrow_signing_secret: str = os.getenv("A2A_EXCHANGE_FEDERATION_ESCROW_SECRET", "")
+    base_url: str = os.getenv("A2A_EXCHANGE_BASE_URL", "")
+    exchange_name: str = os.getenv("A2A_EXCHANGE_NAME", "A2A Settlement Exchange")
+    exchange_operator: str = os.getenv("A2A_EXCHANGE_OPERATOR", "")
+    exchange_id: str = os.getenv("A2A_EXCHANGE_ID", "a2a-se-default")
 
     # Attestation TTL (global maximums — instances can configure stricter values)
     attestation_ttl_identity_days: int = _get_int("A2A_EXCHANGE_ATTESTATION_TTL_IDENTITY_DAYS", 365)

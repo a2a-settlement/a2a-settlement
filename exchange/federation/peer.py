@@ -13,7 +13,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from exchange.config import get_session
 from exchange.federation.manifest import generate_capability_manifest
 from exchange.federation.models import FederationPeer
 
@@ -88,22 +91,21 @@ def _validate_nonce(nonce: str) -> None:
 
 
 @router.post("/peer")
-async def peering_handshake(body: PeeringRequestBody, request: Request):
+def peering_handshake(
+    body: PeeringRequestBody,
+    request: Request,
+    session: Session = Depends(get_session),
+):
     """Handle a federation peering request."""
     _validate_timestamp(body.timestamp)
     _validate_nonce(body.nonce)
 
     from exchange.config import settings
 
-    db_factory = request.app.state.db
-    async with db_factory() as session:
-        from sqlalchemy import select
-
-        existing = (
-            await session.execute(
-                select(FederationPeer).where(
-                    FederationPeer.peer_did == body.initiator.did
-                )
+    with session.begin():
+        existing = session.execute(
+            select(FederationPeer).where(
+                FederationPeer.peer_did == body.initiator.did
             )
         ).scalar_one_or_none()
 
@@ -141,8 +143,6 @@ async def peering_handshake(body: PeeringRequestBody, request: Request):
                 current_rho=body.trust_discount_policy.get("initial_rho", 0.15),
             )
             session.add(peer)
-
-        await session.commit()
 
     response_nonce = secrets.token_hex(16)
 

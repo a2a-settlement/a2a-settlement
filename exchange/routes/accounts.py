@@ -11,12 +11,17 @@ from sqlalchemy.orm import Session
 from exchange.auth import authenticate_bot
 from exchange.config import get_session, settings
 from exchange.ratelimit import limiter
-from exchange.models import Account, Balance, Transaction
+from exchange.models import Account, Balance, GatewayClaim, Transaction
 from exchange.ratelimit import check_register_rate_limit
 from exchange.schemas import (
     AccountResponse,
     AgentCardResponse,
+    ClaimListResponse,
+    ClaimRequest,
+    ClaimResponse,
+    DirectoryAccountResponse,
     DirectoryResponse,
+    GatewayClaimInfo,
     KYARegisterResponse,
     KYAVerificationDetail,
     RegisterAccountInfo,
@@ -97,6 +102,7 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
             description=req.description,
             skills=req.skills or [],
             daily_spend_limit=spend_limit,
+            account_type=req.account_type,
         )
         session.add(account)
         session.flush()
@@ -141,66 +147,262 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
     )
 
 
+def _directory_account_response(
+    acct: Account, claims: list[GatewayClaim] | None = None
+) -> DirectoryAccountResponse:
+    """Build a public-safe response for the directory (no contact_email)."""
+    claim_info = None
+    if claims:
+        claim_info = [
+            GatewayClaimInfo(
+                gateway_id=c.gateway_id,
+                gateway_name=c.gateway.bot_name if c.gateway else "",
+                verified=c.verified,
+                claimed_at=c.claimed_at,
+            )
+            for c in claims
+        ]
+    return DirectoryAccountResponse(
+        id=acct.id,
+        bot_name=acct.bot_name,
+        developer_id=acct.developer_id,
+        developer_name=acct.developer_name,
+        description=acct.description,
+        skills=acct.skills,
+        status=acct.status,
+        reputation=float(acct.reputation),
+        account_type=acct.account_type,
+        created_at=acct.created_at,
+        gateway_claims=claim_info,
+    )
+
+
+def _account_response(acct: Account, claims: list[GatewayClaim] | None = None) -> AccountResponse:
+    claim_info = None
+    if claims:
+        claim_info = [
+            GatewayClaimInfo(
+                gateway_id=c.gateway_id,
+                gateway_name=c.gateway.bot_name if c.gateway else "",
+                verified=c.verified,
+                claimed_at=c.claimed_at,
+            )
+            for c in claims
+        ]
+    return AccountResponse(
+        id=acct.id,
+        bot_name=acct.bot_name,
+        developer_id=acct.developer_id,
+        developer_name=acct.developer_name,
+        contact_email=acct.contact_email,
+        description=acct.description,
+        skills=acct.skills,
+        status=acct.status,
+        reputation=float(acct.reputation),
+        daily_spend_limit=acct.daily_spend_limit,
+        account_type=acct.account_type,
+        created_at=acct.created_at,
+        gateway_claims=claim_info,
+    )
+
+
 @router.get("/accounts/directory", response_model=DirectoryResponse, tags=["Accounts"])
 def directory(
     skill: str | None = None,
+    gateway_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
     session: Session = Depends(get_session),
 ) -> DirectoryResponse:
+    from sqlalchemy.orm import joinedload
+
     with session.begin():
         q = (
             select(Account)
             .where(Account.status == "active")
+            .where(Account.account_type == "agent")
             .order_by(Account.reputation.desc())
-            .limit(limit)
-            .offset(offset)
         )
+
+        if gateway_id:
+            q = q.join(GatewayClaim, GatewayClaim.account_id == Account.id).where(
+                GatewayClaim.gateway_id == gateway_id,
+                GatewayClaim.status == "active",
+            )
+
+        q = q.limit(limit).offset(offset)
         bots = session.execute(q).scalars().all()
+
+        bot_ids = [b.id for b in bots]
+        claims_by_agent: dict[str, list[GatewayClaim]] = {}
+        if bot_ids:
+            claims_q = (
+                select(GatewayClaim)
+                .options(joinedload(GatewayClaim.gateway))
+                .where(
+                    GatewayClaim.account_id.in_(bot_ids),
+                    GatewayClaim.status == "active",
+                )
+            )
+            for c in session.execute(claims_q).scalars().all():
+                claims_by_agent.setdefault(c.account_id, []).append(c)
 
     if skill:
         bots = [b for b in bots if isinstance(b.skills, list) and skill in b.skills]
 
     return DirectoryResponse(
-        bots=[
-            AccountResponse(
-                id=b.id,
-                bot_name=b.bot_name,
-                developer_id=b.developer_id,
-                developer_name=b.developer_name,
-                contact_email=b.contact_email,
-                description=b.description,
-                skills=b.skills,
-                status=b.status,
-                reputation=float(b.reputation),
-                daily_spend_limit=b.daily_spend_limit,
-                created_at=b.created_at,
-            )
-            for b in bots
-        ],
+        bots=[_directory_account_response(b, claims_by_agent.get(b.id)) for b in bots],
         count=len(bots),
     )
 
 
-@router.get("/accounts/{account_id}", response_model=AccountResponse, tags=["Accounts"])
-def get_account(account_id: str, session: Session = Depends(get_session)) -> AccountResponse:
+@router.get("/accounts/{account_id}", response_model=DirectoryAccountResponse, tags=["Accounts"])
+def get_account(account_id: str, session: Session = Depends(get_session)) -> DirectoryAccountResponse:
+    from sqlalchemy.orm import joinedload
+
     with session.begin():
         acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
         if acct is None:
             raise HTTPException(status_code=404, detail="Account not found")
-        return AccountResponse(
-            id=acct.id,
-            bot_name=acct.bot_name,
-            developer_id=acct.developer_id,
-            developer_name=acct.developer_name,
-            contact_email=acct.contact_email,
-            description=acct.description,
-            skills=acct.skills,
-            status=acct.status,
-            reputation=float(acct.reputation),
-            daily_spend_limit=acct.daily_spend_limit,
-            created_at=acct.created_at,
+        claims = (
+            session.execute(
+                select(GatewayClaim)
+                .options(joinedload(GatewayClaim.gateway))
+                .where(GatewayClaim.account_id == account_id, GatewayClaim.status == "active")
+            )
+            .scalars()
+            .all()
         )
+        return _directory_account_response(acct, list(claims))
+
+
+@router.post(
+    "/accounts/{account_id}/claim",
+    status_code=201,
+    response_model=ClaimResponse,
+    tags=["Accounts"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def claim_agent(
+    request: Request,
+    account_id: str,
+    body: ClaimRequest | None = None,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> ClaimResponse:
+    """Claim an agent for a gateway. The authenticated account must be a gateway."""
+    if current.get("account_type", "agent") != "gateway":
+        raise HTTPException(status_code=403, detail="Only gateway accounts can claim agents")
+
+    with session.begin():
+        agent = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if agent.account_type != "agent":
+            raise HTTPException(status_code=400, detail="Can only claim agent accounts")
+
+        existing = session.execute(
+            select(GatewayClaim).where(
+                GatewayClaim.gateway_id == current["id"],
+                GatewayClaim.account_id == account_id,
+            )
+        ).scalar_one_or_none()
+        if existing and existing.status == "active":
+            raise HTTPException(status_code=409, detail="Agent already claimed by this gateway")
+
+        verified = False
+        if body and body.agent_api_key:
+            agent_hash = agent.api_key_hash
+            if bcrypt.checkpw(body.agent_api_key.encode("utf-8"), agent_hash.encode("utf-8")):
+                verified = True
+            else:
+                raise HTTPException(status_code=401, detail="Invalid agent API key")
+
+        if existing:
+            existing.status = "active"
+            existing.verified = verified
+            claim = existing
+        else:
+            claim = GatewayClaim(
+                gateway_id=current["id"],
+                account_id=account_id,
+                verified=verified,
+            )
+            session.add(claim)
+        session.flush()
+
+    return ClaimResponse(
+        claim_id=claim.id,
+        gateway_id=claim.gateway_id,
+        account_id=claim.account_id,
+        verified=claim.verified,
+        status=claim.status,
+        claimed_at=claim.claimed_at,
+    )
+
+
+@router.delete(
+    "/accounts/{account_id}/claim",
+    tags=["Accounts"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def unclaim_agent(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Remove a gateway's claim on an agent."""
+    with session.begin():
+        claim = session.execute(
+            select(GatewayClaim).where(
+                GatewayClaim.gateway_id == current["id"],
+                GatewayClaim.account_id == account_id,
+                GatewayClaim.status == "active",
+            )
+        ).scalar_one_or_none()
+        if claim is None:
+            raise HTTPException(status_code=404, detail="No active claim found")
+        claim.status = "released"
+        session.add(claim)
+    return {"status": "released", "account_id": account_id}
+
+
+@router.get(
+    "/accounts/{account_id}/claims",
+    response_model=ClaimListResponse,
+    tags=["Accounts"],
+)
+def list_claims(
+    account_id: str,
+    session: Session = Depends(get_session),
+) -> ClaimListResponse:
+    """List which gateways have claimed an agent."""
+    with session.begin():
+        claims = (
+            session.execute(
+                select(GatewayClaim).where(
+                    GatewayClaim.account_id == account_id,
+                    GatewayClaim.status == "active",
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return ClaimListResponse(
+        claims=[
+            ClaimResponse(
+                claim_id=c.id,
+                gateway_id=c.gateway_id,
+                account_id=c.account_id,
+                verified=c.verified,
+                status=c.status,
+                claimed_at=c.claimed_at,
+            )
+            for c in claims
+        ],
+        count=len(claims),
+    )
 
 
 @router.put("/accounts/skills", response_model=UpdateSkillsResponse, tags=["Accounts"])

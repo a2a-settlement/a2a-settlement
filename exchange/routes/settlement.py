@@ -63,6 +63,43 @@ _spending_guard = SpendingLimitGuard(
     spending_freeze_minutes=settings.spending_freeze_minutes,
 )
 
+_federation_coordinator = None
+
+
+def _get_federation_coordinator():
+    """Lazily create the federation escrow coordinator (only if federation is enabled)."""
+    global _federation_coordinator
+    if _federation_coordinator is not None:
+        return _federation_coordinator
+    if not getattr(settings, "federation_enabled", False):
+        return None
+    from exchange.federation.escrow_coordination import FederatedEscrowCoordinator
+    _federation_coordinator = FederatedEscrowCoordinator()
+    return _federation_coordinator
+
+
+def _notify_federation(method_name: str, escrow, **kwargs) -> None:
+    """Send a federation notification if the escrow is federated."""
+    if not getattr(escrow, "is_federated", False):
+        return
+    peer_url = getattr(escrow, "designated_exchange_did", None)
+    if not peer_url:
+        return
+    coordinator = _get_federation_coordinator()
+    if coordinator is None:
+        return
+    try:
+        method = getattr(coordinator, method_name)
+        method(escrow, peer_url, **kwargs)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Federation notification %s failed for escrow %s",
+            method_name,
+            getattr(escrow, "id", "?"),
+            exc_info=True,
+        )
+
 
 router = APIRouter()
 
@@ -794,6 +831,7 @@ def create_escrow(
         )
 
     fire_webhook_event(session, escrow, "escrow.created")
+    _notify_federation("notify_escrow_created", escrow)
     log_settlement_event(
         escrow_id=escrow.id,
         event_type="escrow.created",
@@ -877,6 +915,11 @@ def deliver(
         }
 
     fire_webhook_event(session, escrow, "escrow.delivered")
+    _notify_federation(
+        "notify_delivery_submitted", escrow,
+        delivered_content=req.content,
+        provenance=prov_dict,
+    )
     log_settlement_event(
         escrow_id=escrow.id,
         event_type="escrow.delivered",
@@ -1156,6 +1199,11 @@ def release(
             session.add(provider)
 
     fire_webhook_event(session, escrow, "escrow.released")
+    _notify_federation(
+        "notify_escrow_released", escrow,
+        released_amount=pay_amount,
+        released_fee=pay_fee,
+    )
     log_settlement_event(
         escrow_id=req.escrow_id,
         event_type="escrow.released",
@@ -1260,6 +1308,8 @@ def refund(
 
     event_type = "escrow.released" if is_holdback else "escrow.refunded"
     fire_webhook_event(session, escrow, event_type)
+    if not is_holdback:
+        _notify_federation("notify_escrow_refunded", escrow)
     log_settlement_event(
         escrow_id=req.escrow_id,
         event_type=event_type,
@@ -1348,6 +1398,11 @@ def dispute(
 
     fire_webhook_event(session, escrow, "escrow.disputed")
     fire_webhook_event(session, escrow, "escrow.evidence_window_opened")
+    _notify_federation(
+        "notify_dispute_filed", escrow,
+        dispute_reason=req.reason,
+        filed_by=current["id"],
+    )
     log_settlement_event(
         escrow_id=req.escrow_id,
         event_type="escrow.disputed",

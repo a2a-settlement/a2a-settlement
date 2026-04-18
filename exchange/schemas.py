@@ -33,6 +33,7 @@ class RegisterRequest(BaseModel):
     skills: list[str] | None = None
     invite_code: str | None = None
     daily_spend_limit: int | None = None
+    account_type: str = Field("agent", pattern=r"^(agent|gateway)$")
 
 
 class RegisterAccountInfo(BaseModel):
@@ -69,11 +70,33 @@ class AccountResponse(BaseModel):
     status: str
     reputation: float
     daily_spend_limit: int | None = None
+    account_type: str = "agent"
     created_at: datetime | None = None
+    gateway_claims: list["GatewayClaimInfo"] | None = None
+
+
+class DirectoryAccountResponse(BaseModel):
+    """Public-safe account info returned by the directory endpoint.
+
+    Omits contact_email and daily_spend_limit to prevent PII leakage on
+    the unauthenticated directory listing.
+    """
+
+    id: str
+    bot_name: str
+    developer_id: str
+    developer_name: str
+    description: str | None = None
+    skills: list[str] = []
+    status: str
+    reputation: float
+    account_type: str = "agent"
+    created_at: datetime | None = None
+    gateway_claims: list["GatewayClaimInfo"] | None = None
 
 
 class DirectoryResponse(BaseModel):
-    bots: list[AccountResponse]
+    bots: list[DirectoryAccountResponse]
     count: int
 
 
@@ -100,6 +123,34 @@ class UpdateSkillsResponse(BaseModel):
 class RotateKeyResponse(BaseModel):
     api_key: str
     grace_period_minutes: int
+
+
+# --- Gateway Claims ---
+
+
+class ClaimRequest(BaseModel):
+    agent_api_key: str | None = Field(None, description="Agent's API key for verified claims")
+
+
+class ClaimResponse(BaseModel):
+    claim_id: str
+    gateway_id: str
+    account_id: str
+    verified: bool
+    status: str
+    claimed_at: datetime
+
+
+class GatewayClaimInfo(BaseModel):
+    gateway_id: str
+    gateway_name: str
+    verified: bool
+    claimed_at: datetime
+
+
+class ClaimListResponse(BaseModel):
+    claims: list[ClaimResponse]
+    count: int
 
 
 # --- Deposit ---
@@ -647,6 +698,13 @@ class StatsProvenanceInfo(BaseModel):
     pending_efficacy_reviews: int = 0
 
 
+class StatsSettlementOutcomes(BaseModel):
+    released: int = 0
+    refunded: int = 0
+    partial: int = 0
+    held: int = 0
+
+
 class StatsResponse(BaseModel):
     network: StatsNetworkInfo
     token_supply: StatsTokenSupply
@@ -655,6 +713,7 @@ class StatsResponse(BaseModel):
     active_escrows: int
     compliance: StatsComplianceInfo | None = None
     provenance: StatsProvenanceInfo | None = None
+    settlement_outcomes: StatsSettlementOutcomes | None = None
 
 
 # --- KYA ---

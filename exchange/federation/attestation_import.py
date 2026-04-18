@@ -9,8 +9,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from exchange.config import get_session
+from exchange.federation.models import FederatedAttestation, FederationPeer
 
 router = APIRouter(prefix="/federation", tags=["Federation"])
 
@@ -37,19 +42,17 @@ class ImportResponse(BaseModel):
 
 
 @router.post("/attestation/import")
-async def import_attestations(
-    body: ImportRequest, request: Request
+def import_attestations(
+    body: ImportRequest,
+    request: Request,
+    session: Session = Depends(get_session),
 ) -> ImportResponse:
     """Import cross-exchange attestation VCs."""
     results: list[ImportResultItem] = []
     imported = 0
     rejected = 0
 
-    db_factory = request.app.state.db
-    async with db_factory() as session:
-        from sqlalchemy import select
-        from exchange.federation.models import FederationPeer, FederatedAttestation
-
+    with session.begin():
         for vc_data in body.attestations:
             vc_id = vc_data.get("id", "")
             issuer_did = vc_data.get("issuer", "")
@@ -62,12 +65,9 @@ async def import_attestations(
                     attestation_type = t
                     break
 
-            # Check for duplicate
-            existing = (
-                await session.execute(
-                    select(FederatedAttestation).where(
-                        FederatedAttestation.vc_id == vc_id
-                    )
+            existing = session.execute(
+                select(FederatedAttestation).where(
+                    FederatedAttestation.vc_id == vc_id
                 )
             ).scalar_one_or_none()
 
@@ -81,13 +81,10 @@ async def import_attestations(
                 )
                 continue
 
-            # Look up peer for Trust Discount
-            peer = (
-                await session.execute(
-                    select(FederationPeer).where(
-                        FederationPeer.peer_did == issuer_did,
-                        FederationPeer.status == "active",
-                    )
+            peer = session.execute(
+                select(FederationPeer).where(
+                    FederationPeer.peer_did == issuer_did,
+                    FederationPeer.status == "active",
                 )
             ).scalar_one_or_none()
 
@@ -103,14 +100,12 @@ async def import_attestations(
                 rejected += 1
                 continue
 
-            # Extract reputation score if this is a ReputationAttestation
             native_rep = subject.get("reputationScore")
             rho = peer.current_rho
             effective_rep = None
             if native_rep is not None:
                 effective_rep = native_rep * rho
 
-            # Parse dates
             valid_from = None
             valid_until = None
             try:
@@ -152,8 +147,6 @@ async def import_attestations(
                     effective_reputation=effective_rep,
                 )
             )
-
-        await session.commit()
 
     return ImportResponse(
         imported=imported,

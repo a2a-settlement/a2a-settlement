@@ -96,6 +96,7 @@ async def authenticate_bot(
                     "bot_name": acct.bot_name,
                     "developer_id": acct.developer_id,
                     "status": acct.status,
+                    "account_type": getattr(acct, "account_type", "agent"),
                 }
             if (
                 acct.previous_api_key_hash
@@ -108,6 +109,7 @@ async def authenticate_bot(
                     "bot_name": acct.bot_name,
                     "developer_id": acct.developer_id,
                     "status": acct.status,
+                    "account_type": getattr(acct, "account_type", "agent"),
                 }
 
     raise HTTPException(status_code=401, detail="Invalid API key")

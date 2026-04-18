@@ -168,9 +168,21 @@ class Account(Base):
         back_populates="account", uselist=False, cascade="all, delete-orphan"
     )
 
+    account_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="agent", server_default="agent"
+    )
+
+    gateway_claims: Mapped[list["GatewayClaim"]] = relationship(
+        back_populates="agent",
+        foreign_keys="GatewayClaim.account_id",
+    )
+
     __table_args__ = (
         CheckConstraint(
             "status IN ('active', 'suspended', 'operator')", name="ck_account_status"
+        ),
+        CheckConstraint(
+            "account_type IN ('agent', 'gateway')", name="ck_account_type"
         ),
     )
 
@@ -347,6 +359,40 @@ class WebhookConfig(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class GatewayClaim(Base):
+    __tablename__ = "gateway_claims"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    gateway_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active"
+    )
+    claimed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    gateway: Mapped[Account] = relationship(
+        foreign_keys=[gateway_id],
+    )
+    agent: Mapped[Account] = relationship(
+        back_populates="gateway_claims",
+        foreign_keys=[account_id],
+    )
+
+    __table_args__ = (
+        Index("uq_gateway_claim", "gateway_id", "account_id", unique=True),
+        CheckConstraint(
+            "status IN ('active', 'released')", name="ck_gateway_claim_status"
+        ),
     )
 
 

@@ -151,6 +151,16 @@ class SettlementExchangeClient:
             params["skill"] = skill
         return self._get(url, params=params)
 
+    def stats(self) -> dict[str, Any]:
+        """Fetch public exchange statistics (no auth required)."""
+        url = _join(self.base_url, "/v1/stats")
+        return self._get(url)
+
+    def recent_activity(self, *, limit: int = 20) -> dict[str, Any]:
+        """Fetch recent escrow activity with resolved bot names (no auth required)."""
+        url = _join(self.base_url, "/v1/stats/recent-activity")
+        return self._get(url, params={"limit": limit})
+
     def get_account(self, *, account_id: str) -> dict[str, Any]:
         url = _join(self.base_url, f"/v1/accounts/{account_id}")
         return self._get(url)

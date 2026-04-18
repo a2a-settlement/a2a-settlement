@@ -5,10 +5,17 @@ Verifies a Verifiable Credential presented by a federated agent.
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from exchange.config import get_session
+from exchange.federation.models import FederationPeer
 
 router = APIRouter(prefix="/federation", tags=["Federation"])
 
@@ -35,8 +42,37 @@ class VerifyResponse(BaseModel):
     denial_reasons: list[str] = []
 
 
+def _verify_vc_signature(vc_data: dict) -> bool:
+    """Verify Ed25519 proof signature on a Verifiable Credential."""
+    proof = vc_data.get("proof", {})
+    proof_value = proof.get("proofValue") or proof.get("jws")
+    verification_method = proof.get("verificationMethod", "")
+    if not proof_value or not verification_method:
+        return False
+
+    try:
+        from exchange.identity.crypto import verify_ed25519_signature, canonicalize_json
+
+        payload = {k: v for k, v in vc_data.items() if k != "proof"}
+        message = canonicalize_json(payload)
+
+        public_key_multibase = verification_method
+        if verification_method.startswith("did:key:"):
+            public_key_multibase = verification_method.split("did:key:")[1]
+            if "#" in public_key_multibase:
+                public_key_multibase = public_key_multibase.split("#")[0]
+
+        return verify_ed25519_signature(message, proof_value, public_key_multibase)
+    except Exception:
+        return False
+
+
 @router.post("/verify")
-async def verify_credential(body: VerifyRequest, request: Request) -> VerifyResponse:
+def verify_credential(
+    body: VerifyRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> VerifyResponse:
     """Verify a VC presented by a federated agent."""
     vc_data = body.verifiable_credential
     denial_reasons: list[str] = []
@@ -54,22 +90,15 @@ async def verify_credential(body: VerifyRequest, request: Request) -> VerifyResp
 
     details = VerificationDetail()
 
-    # Check if issuer is a known federation peer
-    db_factory = request.app.state.db
-    peer_rho = None
-    async with db_factory() as session:
-        from sqlalchemy import select
-        from exchange.federation.models import FederationPeer
-
-        peer = (
-            await session.execute(
-                select(FederationPeer).where(
-                    FederationPeer.peer_did == issuer_did,
-                    FederationPeer.status == "active",
-                )
+    with session.begin():
+        peer = session.execute(
+            select(FederationPeer).where(
+                FederationPeer.peer_did == issuer_did,
+                FederationPeer.status == "active",
             )
         ).scalar_one_or_none()
 
+        peer_rho = None
         if peer:
             details.issuer_is_peer = True
             peer_rho = peer.current_rho
@@ -86,8 +115,6 @@ async def verify_credential(body: VerifyRequest, request: Request) -> VerifyResp
     valid_from = vc_data.get("validFrom")
     valid_until = vc_data.get("validUntil")
     if valid_from:
-        from datetime import datetime, timezone
-
         try:
             vf = datetime.fromisoformat(valid_from).replace(tzinfo=timezone.utc)
             now = datetime.now(timezone.utc)
@@ -101,7 +128,11 @@ async def verify_credential(body: VerifyRequest, request: Request) -> VerifyResp
         except (ValueError, TypeError):
             denial_reasons.append("Invalid date format in credential")
 
-    details.signature_valid = True  # placeholder; full Ed25519 verification via auth lib
+    # Ed25519 signature verification
+    sig_valid = _verify_vc_signature(vc_data)
+    details.signature_valid = sig_valid
+    if not sig_valid:
+        denial_reasons.append("Proof signature verification failed")
 
     valid = len(denial_reasons) == 0
 

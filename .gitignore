@@ -8,6 +8,8 @@ __pycache__/
 .env.*
 
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
@@ -22,4 +24,8 @@ dist/
 
 # Windows "Mark of the Web" artifacts sometimes appear when copied from NTFS.
 *:Zone.Identifier
+
+# Local credentials (test agents)
+test_agents/.client_credentials.json
+test_agents/.provider_credentials.json
 

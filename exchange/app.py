@@ -163,11 +163,13 @@ def create_app() -> FastAPI:
         from exchange.federation.verify import router as verify_router
         from exchange.federation.attestation_import import router as import_router
         from exchange.federation.health import router as health_router
+        from exchange.federation.escrow_notify import router as escrow_notify_router
 
         app.include_router(peer_router)
         app.include_router(verify_router)
         app.include_router(import_router)
         app.include_router(health_router)
+        app.include_router(escrow_notify_router)
 
     return app
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from exchange.schemas import (
     StatsNetworkInfo,
     StatsProvenanceInfo,
     StatsResponse,
+    StatsSettlementOutcomes,
     StatsTokenSupply,
     StatsTreasury,
 )
@@ -94,6 +96,19 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
             )
         ).scalar_one()
 
+        tx_released = session.execute(
+            select(func.count(Transaction.id)).where(Transaction.tx_type == "escrow_release")
+        ).scalar_one()
+        tx_refunded = session.execute(
+            select(func.count(Transaction.id)).where(Transaction.tx_type == "escrow_refund")
+        ).scalar_one()
+        tx_partial = session.execute(
+            select(func.count(Transaction.id)).where(Transaction.tx_type == "escrow_partial_release")
+        ).scalar_one()
+        tx_held = session.execute(
+            select(func.count(Transaction.id)).where(Transaction.tx_type == "escrow_hold")
+        ).scalar_one()
+
     denom = int(total_supply) or 1
     velocity = float(tx_volume_24h) / float(denom)
 
@@ -115,6 +130,13 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
         pending_efficacy_reviews=int(pending_efficacy),
     )
 
+    outcomes = StatsSettlementOutcomes(
+        released=int(tx_released),
+        refunded=int(tx_refunded),
+        partial=int(tx_partial),
+        held=int(tx_held),
+    )
+
     return StatsResponse(
         network=StatsNetworkInfo(
             total_bots=int(total_bots), active_bots=int(active_bots)
@@ -133,4 +155,56 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
         active_escrows=int(active_escrows),
         compliance=compliance,
         provenance=provenance,
+        settlement_outcomes=outcomes,
     )
+
+
+_ESCROW_STATUS_TO_OUTCOME = {
+    "released": "approve",
+    "refunded": "block",
+    "partially_released": "flag",
+    "held": "pending",
+    "expired": "block",
+    "disputed": "flag",
+}
+
+
+@router.get("/stats/recent-activity", tags=["Stats"])
+def recent_activity(
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Public endpoint: recent escrow settlements with bot names resolved."""
+    with session.begin():
+        rows = session.execute(
+            select(Escrow)
+            .order_by(Escrow.created_at.desc())
+            .limit(limit)
+        ).scalars().all()
+
+        agent_ids = set()
+        for e in rows:
+            agent_ids.add(e.requester_id)
+            agent_ids.add(e.provider_id)
+
+        names: dict[str, str] = {}
+        if agent_ids:
+            accts = session.execute(
+                select(Account.id, Account.bot_name).where(Account.id.in_(agent_ids))
+            ).all()
+            names = {str(a.id): a.bot_name for a in accts}
+
+    entries = []
+    for e in rows:
+        entries.append({
+            "id": str(e.id),
+            "timestamp": (e.resolved_at or e.created_at).isoformat() if (e.resolved_at or e.created_at) else "",
+            "source_agent": names.get(e.requester_id, e.requester_id),
+            "target_agent": names.get(e.provider_id, e.provider_id),
+            "outcome": _ESCROW_STATUS_TO_OUTCOME.get(e.status, e.status),
+            "escrow_id": str(e.id),
+            "amount": int(e.amount),
+            "status": e.status,
+            "task_id": e.task_id,
+        })
+    return {"entries": entries, "total": len(entries)}
