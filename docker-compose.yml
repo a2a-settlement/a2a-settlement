@@ -118,7 +118,7 @@ services:
       - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: a2a
-      POSTGRES_PASSWORD: U1sVWBkEwcuvyYGjNmKsX8_inV0iollgx_2ytSj4Zt9huj3Wkfm1_JodtVQkkyXf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-a2a}
       POSTGRES_DB: a2a_exchange
     volumes:
       - pgdata:/var/lib/postgresql/data
