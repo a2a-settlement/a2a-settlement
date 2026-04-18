@@ -19,7 +19,7 @@ from exchange.models import Base
 from exchange.ratelimit import limiter
 from exchange.routes import accounts, attestations, dashboard, kya_admin, settlement, stats, webhooks
 from exchange.schemas import HealthResponse
-from exchange.tasks import background_expiry_loop
+from exchange.tasks import background_diversity_loop, background_expiry_loop
 
 import exchange.identity.issuer_registry  # noqa: F401 — register TrustedIssuer with Base
 
@@ -46,6 +46,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     tasks: list[asyncio.Task] = []
     tasks.append(asyncio.create_task(background_expiry_loop()))
+    tasks.append(asyncio.create_task(background_diversity_loop()))
 
     if settings.kya_enabled:
         from exchange.identity.monitor import KYAMonitor

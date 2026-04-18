@@ -52,6 +52,7 @@ from exchange.schemas import (
     VIAttestation,
 )
 from exchange.compliance_log import log_settlement_event
+from exchange.principal_resolver import classify_transaction
 from exchange.spending_guard import SpendingLimitGuard
 from exchange.tasks import expire_stale_escrows as _expire_stale_escrows
 from exchange.webhooks import fire_webhook_event
@@ -82,6 +83,24 @@ def _effective_fee_percent(amount: int, fee: int) -> float:
     return float(
         (Decimal(fee) / Decimal(amount) * Decimal("100")).quantize(Decimal("0.0001"))
     )
+
+
+def _guarded_ema_update(
+    current: float,
+    outcome: float,
+    self_dealing_class: str | None,
+    lam: float = 0.1,
+) -> float:
+    """Apply an EMA reputation update, suppressed or downweighted for self-dealing.
+
+    self_dealing_class='self_dealing'          → no update (suppress entirely)
+    self_dealing_class='suspected_self_dealing' → 25% weight applied to lam
+    self_dealing_class='arms_length' or None   → full update at lam
+    """
+    if self_dealing_class == "self_dealing":
+        return current
+    effective_lam = lam * (0.25 if self_dealing_class == "suspected_self_dealing" else 1.0)
+    return current * (1.0 - effective_lam) + outcome * effective_lam
 
 
 def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
@@ -550,6 +569,8 @@ def instant_settle(
         if not kya_gate["allowed"]:
             raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
 
+        instant_sdc = classify_transaction(current["id"], req.provider_id, session)
+
         requester_bal = session.execute(
             _lock(select(Balance).where(Balance.account_id == current["id"]))
         ).scalar_one_or_none()
@@ -589,6 +610,7 @@ def instant_settle(
                 amount=req.amount,
                 tx_type="instant_settlement",
                 description=req.description or f"Instant settle: {req.task_type or req.task_id or 'unspecified'}",
+                self_dealing_class=instant_sdc,
             )
         )
         if fee_amount > 0:
@@ -600,10 +622,11 @@ def instant_settle(
                     amount=fee_amount,
                     tx_type="fee",
                     description="Platform fee (instant settlement)",
+                    fee_class=instant_sdc,
                 )
             )
 
-        provider_acct.reputation = min(1.0, float(provider_acct.reputation) * 0.9 + 1.0 * 0.1)
+        provider_acct.reputation = min(1.0, _guarded_ema_update(float(provider_acct.reputation), 1.0, instant_sdc))
         session.add(provider_acct)
 
     log_settlement_event(
@@ -734,6 +757,8 @@ def create_escrow(
             else None
         )
 
+        escrow_sdc = classify_transaction(current["id"], req.provider_id, session)
+
         escrow = Escrow(
             requester_id=current["id"],
             provider_id=req.provider_id,
@@ -752,6 +777,7 @@ def create_escrow(
             provider_did=kya_gate["provider_did"],
             kya_level_at_creation=kya_gate["required_level"],
             hitl_required=kya_gate["hitl_required"],
+            self_dealing_class=escrow_sdc,
         )
         session.add(escrow)
         session.flush()
@@ -983,7 +1009,7 @@ def partial_release(
         if provider is not None:
             boost = (pct / 100.0) * 0.1
             provider.reputation = min(
-                1.0, float(provider.reputation) * (1.0 - boost) + 1.0 * boost
+                1.0, _guarded_ema_update(float(provider.reputation), 1.0, escrow.self_dealing_class, lam=boost)
             )
             session.add(provider)
 
@@ -1103,6 +1129,7 @@ def release(
                 amount=pay_amount,
                 tx_type=tx_type,
                 description=tx_desc,
+                self_dealing_class=escrow.self_dealing_class,
             )
         )
         if pay_fee > 0:
@@ -1115,6 +1142,7 @@ def release(
                     tx_type="fee",
                     description="Platform transaction fee"
                     + (" (holdback)" if is_holdback else ""),
+                    fee_class=escrow.self_dealing_class,
                 )
             )
 
@@ -1122,7 +1150,9 @@ def release(
             select(Account).where(Account.id == escrow.provider_id)
         ).scalar_one_or_none()
         if provider is not None:
-            provider.reputation = min(1.0, float(provider.reputation) * 0.9 + 1.0 * 0.1)
+            provider.reputation = min(
+                1.0, _guarded_ema_update(float(provider.reputation), 1.0, escrow.self_dealing_class)
+            )
             session.add(provider)
 
     fire_webhook_event(session, escrow, "escrow.released")
@@ -1212,6 +1242,7 @@ def refund(
                 amount=refund_total,
                 tx_type=tx_type,
                 description=tx_desc,
+                self_dealing_class=escrow.self_dealing_class,
             )
         )
 
@@ -1219,7 +1250,9 @@ def refund(
             select(Account).where(Account.id == escrow.provider_id)
         ).scalar_one_or_none()
         if provider is not None and escrow.delivered_at is not None:
-            provider.reputation = max(0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1)
+            provider.reputation = max(
+                0.0, _guarded_ema_update(float(provider.reputation), 0.0, escrow.self_dealing_class)
+            )
             session.add(provider)
 
         if not is_holdback:
@@ -1403,6 +1436,7 @@ def resolve(
                     amount=int(escrow.amount),
                     tx_type="escrow_release",
                     description="Dispute resolved - payment released",
+                    self_dealing_class=escrow.self_dealing_class,
                 )
             )
             if escrow.fee_amount > 0:
@@ -1414,6 +1448,7 @@ def resolve(
                         amount=int(escrow.fee_amount),
                         tx_type="fee",
                         description="Platform transaction fee (dispute resolved)",
+                        fee_class=escrow.self_dealing_class,
                     )
                 )
 
@@ -1422,7 +1457,7 @@ def resolve(
             ).scalar_one_or_none()
             if provider is not None:
                 provider.reputation = min(
-                    1.0, float(provider.reputation) * 0.9 + 1.0 * 0.1
+                    1.0, _guarded_ema_update(float(provider.reputation), 1.0, escrow.self_dealing_class)
                 )
                 _apply_provenance_reputation_penalty(provider, req.provenance_result)
                 session.add(provider)
@@ -1452,6 +1487,7 @@ def resolve(
                     amount=total_held,
                     tx_type="escrow_refund",
                     description="Dispute resolved - tokens refunded",
+                    self_dealing_class=escrow.self_dealing_class,
                 )
             )
 
@@ -1460,7 +1496,7 @@ def resolve(
             ).scalar_one_or_none()
             if provider is not None:
                 provider.reputation = max(
-                    0.0, float(provider.reputation) * 0.9 + 0.0 * 0.1
+                    0.0, _guarded_ema_update(float(provider.reputation), 0.0, escrow.self_dealing_class)
                 )
                 _apply_provenance_reputation_penalty(provider, req.provenance_result)
                 session.add(provider)

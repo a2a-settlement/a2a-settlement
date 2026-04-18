@@ -54,6 +54,7 @@ def log_settlement_event(
     dispute_reason: Optional[str] = None,
     resolution_strategy: Optional[str] = None,
     grounding_chain: Optional[dict] = None,
+    self_dealing_class: Optional[str] = None,
 ) -> Optional[dict]:
     """Record a settlement event in the compliance Merkle tree.
 
@@ -87,6 +88,11 @@ def log_settlement_event(
                 f"{resolution_strategy}|grounding:{gc_summary}"
                 if resolution_strategy
                 else f"grounding:{gc_summary}"
+            )
+        if self_dealing_class and self_dealing_class != "arms_length":
+            sdc_tag = f"sdc:{self_dealing_class}"
+            extra_strategy = (
+                f"{extra_strategy}|{sdc_tag}" if extra_strategy else sdc_tag
             )
 
         payload = PreDisputeAttestationPayload(

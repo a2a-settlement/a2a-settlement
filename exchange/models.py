@@ -5,12 +5,14 @@ from datetime import datetime
 
 from sqlalchemy import (
     CheckConstraint,
+    Float,
     JSON,
     BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     func,
@@ -25,6 +27,77 @@ def _uuid() -> str:
 
 class Base(DeclarativeBase):
     pass
+
+
+class Principal(Base):
+    """Represents a real-world controlling entity (human or org) behind one or more agents.
+
+    Multiple agents can share a principal; the principal resolver collapses those
+    identities for anti-self-dealing checks without exposing the mapping publicly.
+    """
+
+    __tablename__ = "principals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="unknown"
+    )
+    kya_level: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="none"
+    )
+    risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "principal_type IN ('human', 'org', 'unknown')",
+            name="ck_principal_type",
+        ),
+        CheckConstraint(
+            "kya_level IN ('none', 'basic', 'attested', 'verified')",
+            name="ck_principal_kya_level",
+        ),
+    )
+
+
+class AgentPrincipalLink(Base):
+    """Associates an agent account with a principal identity.
+
+    An agent may link to multiple principals with varying confidence scores.
+    The highest-confidence link drives enforcement; lower-confidence links
+    feed analytics and the nightly payment-graph batch.
+    """
+
+    __tablename__ = "agent_principal_links"
+
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), primary_key=True, nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("principals.id"), primary_key=True, nullable=False
+    )
+    link_source: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    established_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "link_source IN ('registration', 'attestation', 'payment_graph', 'behavioral_cluster', 'manual')",
+            name="ck_link_source",
+        ),
+        CheckConstraint("confidence >= 0.0 AND confidence <= 1.0", name="ck_link_confidence"),
+        Index("idx_apl_principal", "principal_id"),
+    )
 
 
 class Account(Base):
@@ -63,6 +136,13 @@ class Account(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    # Counterparty diversity metrics — updated nightly by background_diversity_loop()
+    unique_counterparties_90d: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    counterparty_hhi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    diversity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Oracle role — set by operator via /accounts/admin/register-oracle
     is_oracle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -153,6 +233,12 @@ class Escrow(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Anti-self-dealing classification — set at creation, never updated
+    # 'arms_length' | 'suspected_self_dealing' | 'self_dealing'
+    self_dealing_class: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, index=True
+    )
+
     # Provenance attestation fields
     required_attestation_level: Mapped[str | None] = mapped_column(
         String(20), nullable=True
@@ -234,6 +320,10 @@ class Transaction(Base):
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tx_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    self_dealing_class: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, index=True
+    )
+    fee_class: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -33,6 +33,12 @@ from exchange.identity.did_resolver import DIDResolver
 from exchange.identity.issuer_registry import IssuerRegistry
 from exchange.identity.models import AgentCardModel
 from exchange.identity.vc_verifier import VCVerifier
+from exchange.principal_resolver import (
+    get_or_create_principal,
+    link_agent_to_principal,
+    kya_to_confidence,
+    invalidate_cache,
+)
 
 
 _did_resolver: DIDResolver | None = None
@@ -105,6 +111,16 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
                 description="Starter token allocation on registration",
             )
         )
+
+        # Link the new agent to a principal based on developer_id.
+        # Confidence is 0.3 baseline; rises to 0.9 if a verified DID is present.
+        confidence = kya_to_confidence(account.kya_level_verified)
+        if account.did and account.kya_level_verified >= 2:
+            confidence = 0.9
+        principal_id = get_or_create_principal(
+            account.developer_id, account.kya_level_verified, session
+        )
+        link_agent_to_principal(account.id, principal_id, "registration", confidence, session)
 
     return RegisterResponse(
         account=RegisterAccountInfo(
@@ -605,3 +621,131 @@ def get_verification_status(
             card_verified_at=acct.card_verified_at,
             attestation_expires_at=acct.attestation_expires_at,
         )
+
+
+# ---------------------------------------------------------------------------
+# Principal / anti-self-dealing endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/accounts/{account_id}/principal", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def get_principal(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Return the principal cluster(s) linked to an agent.
+
+    Accessible by the account owner or an operator.
+    """
+    from exchange.models import AgentPrincipalLink, Principal
+
+    with session.begin():
+        acct = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        if current["id"] != account_id and current.get("status") != "operator":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        links = session.execute(
+            select(AgentPrincipalLink, Principal)
+            .join(Principal, Principal.id == AgentPrincipalLink.principal_id)
+            .where(AgentPrincipalLink.agent_id == account_id)
+            .order_by(AgentPrincipalLink.confidence.desc())
+        ).all()
+
+    return {
+        "agent_id": account_id,
+        "links": [
+            {
+                "principal_id": link.AgentPrincipalLink.principal_id,
+                "principal_type": link.Principal.principal_type,
+                "kya_level": link.Principal.kya_level,
+                "link_source": link.AgentPrincipalLink.link_source,
+                "confidence": link.AgentPrincipalLink.confidence,
+                "established_at": link.AgentPrincipalLink.established_at.isoformat()
+                if link.AgentPrincipalLink.established_at
+                else None,
+            }
+            for link in links
+        ],
+    }
+
+
+@router.get("/accounts/{account_id}/counterparty-diversity", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def get_counterparty_diversity(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Return counterparty diversity metrics for an agent.
+
+    Metrics are updated nightly by the background diversity sweep.
+    Accessible by the account owner, any authenticated agent, or an operator.
+    """
+    with session.begin():
+        acct = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+    return {
+        "agent_id": account_id,
+        "unique_counterparties_90d": acct.unique_counterparties_90d,
+        "counterparty_hhi": acct.counterparty_hhi,
+        "diversity_score": acct.diversity_score,
+    }
+
+
+@router.post("/accounts/admin/principals/link", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def admin_link_principal(
+    request: Request,
+    req: dict,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+):
+    """Manually assert a principal link with confidence 1.0 (operator-only).
+
+    Request body: {"agent_id": "<id>", "principal_id": "<id>"}
+    """
+    if current.get("status") != "operator":
+        raise HTTPException(status_code=403, detail="Only the exchange operator can assert manual principal links")
+
+    agent_id = req.get("agent_id") if isinstance(req, dict) else None
+    principal_id = req.get("principal_id") if isinstance(req, dict) else None
+    if not agent_id or not principal_id:
+        raise HTTPException(status_code=422, detail="agent_id and principal_id are required")
+
+    from exchange.models import Principal
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == agent_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Agent account not found")
+
+        principal = session.execute(
+            select(Principal).where(Principal.id == principal_id)
+        ).scalar_one_or_none()
+        if principal is None:
+            raise HTTPException(status_code=404, detail="Principal not found")
+
+        link_agent_to_principal(agent_id, principal_id, "manual", 1.0, session)
+
+    invalidate_cache(agent_id)
+
+    return {
+        "agent_id": agent_id,
+        "principal_id": principal_id,
+        "link_source": "manual",
+        "confidence": 1.0,
+        "status": "linked",
+    }

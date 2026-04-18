@@ -180,6 +180,12 @@ class Settings:
     # Compliance audit (Merkle tree)
     compliance_enabled: bool = _get_bool("A2A_EXCHANGE_COMPLIANCE_ENABLED", False)
 
+    # Anti-self-dealing: diversity sweep
+    diversity_sweep_interval_seconds: int = _get_int(
+        "A2A_EXCHANGE_DIVERSITY_SWEEP_INTERVAL_SECONDS", 86400  # 24h
+    )
+    payment_graph_hops: int = _get_int("A2A_EXCHANGE_PAYMENT_GRAPH_HOPS", 2)
+
     # Attestation TTL (global maximums — instances can configure stricter values)
     attestation_ttl_identity_days: int = _get_int("A2A_EXCHANGE_ATTESTATION_TTL_IDENTITY_DAYS", 365)
     attestation_ttl_reputation_days: int = _get_int("A2A_EXCHANGE_ATTESTATION_TTL_REPUTATION_DAYS", 90)
