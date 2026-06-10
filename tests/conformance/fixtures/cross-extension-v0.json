@@ -1,0 +1,284 @@
+{
+  "schema_version": "1.1",
+  "artefact_id": "cross-extension-v0",
+  "published_at": "2026-05-19T05:30:00Z",
+  "revised_at": "2026-06-01T06:04:23Z",
+  "signer_did": "did:web:api.algovoi.co.uk",
+  "canonicalizer": "rfc8785@0.1.4",
+  "signing_alg": "EdDSA",
+  "kid": "d0481df4cbbda8e8aba86709419884ef",
+  "public_key_resolver": "https://api.algovoi.co.uk/.well-known/jwks.json",
+  "did_document": "https://api.algovoi.co.uk/.well-known/did.json",
+  "context": {
+    "thread": "https://github.com/a2aproject/A2A/discussions/1576",
+    "eriknewton_commitment": "https://github.com/a2aproject/A2A/discussions/1576#discussioncomment-16970991",
+    "msaleme_categories_pending": [
+      "dispute_dos",
+      "reputation_manipulation",
+      "cascade_refund",
+      "skill_pricing_bait"
+    ],
+    "envelope_schema_fields": [
+      "vector_id",
+      "attack_class",
+      "composition_layers",
+      "input_envelope",
+      "expected_verdict",
+      "expected_error_code",
+      "mediator_behavior",
+      "signer_did",
+      "jws"
+    ],
+    "layer_type_provenance": {
+      "_note": "The composition envelope (composition_layers framework, canonicaliser, verification recipe, JWS shape) is AlgoVoi-authored. Individual layer types carry their own authorship as recorded below. A layer type's internal field schema is authored by its originator, not by AlgoVoi.",
+      "envelope": {
+        "authored_by": "AlgoVoi (chopmob-cloud)",
+        "signer_did": "did:web:api.algovoi.co.uk",
+        "covers": [
+          "composition_layers",
+          "canonicalizer",
+          "verification_recipe",
+          "jws"
+        ]
+      },
+      "layer_types": {
+        "settlement": {
+          "authored_by": "AlgoVoi (chopmob-cloud)"
+        },
+        "reputation": {
+          "authored_by": "AlgoVoi (chopmob-cloud)"
+        },
+        "mandate_verification": {
+          "authored_by": "Christian Magorrian / A2CN Protocol",
+          "namespace": "a2cn:record:v0.2",
+          "source": "https://github.com/a2aproject/A2A/discussions/1576",
+          "contributed_at": "2026-06-01T05:36:49Z"
+        },
+        "dispute_resolution": {
+          "authored_by": "Concordia Protocol",
+          "status": "pending_definition",
+          "source": "https://github.com/a2aproject/A2A/discussions/1576"
+        }
+      }
+    },
+    "layer_type_registry": {
+      "settlement": {
+        "authored_by": "AlgoVoi (chopmob-cloud)",
+        "required": [
+          "escrow_id",
+          "settlement_kind",
+          "mandate_hash",
+          "amount",
+          "currency",
+          "rail",
+          "chain"
+        ]
+      },
+      "reputation": {
+        "authored_by": "AlgoVoi (chopmob-cloud)",
+        "required": [
+          "client_did"
+        ],
+        "optional": [
+          "win_rate_30d",
+          "dispute_count_30d",
+          "auto_allow_threshold",
+          "value_weighted_history"
+        ]
+      },
+      "mandate_verification": {
+        "authored_by": "Christian Magorrian / A2CN Protocol",
+        "namespace": "a2cn:record:v0.2",
+        "required": [
+          "layer",
+          "protocol",
+          "version",
+          "session_id",
+          "mandate_hash",
+          "initiator_did",
+          "responder_did",
+          "transaction_record_hash",
+          "record_id"
+        ],
+        "optional": [
+          "requires_human_approval_above",
+          "approval_receipt_hash",
+          "dispute_notice_id"
+        ],
+        "verifier_checks": [
+          "transaction_record_hash: recompute SHA-256 over JCS-canonical transaction record from session inputs; must match.",
+          "mandate_hash: resolve each party DID document, fetch mandate credential, recompute hash; confirms both agents operated within authorised bounds at session time.",
+          "record_id: verify UUID v5 derivation from session_id using A2CN namespace a2cn:record:v0.2."
+        ],
+        "does_not_carry": [
+          "mandate credential",
+          "session message content",
+          "offer chain"
+        ],
+        "note": "dispute_notice_id SHOULD be present for any entry whose terminal state is DISPUTE_RESOLVED, so the chain is reconstructable from the entry alone. It is the join point with the dispute_resolution layer; both point back to transaction_record_hash for chain continuity."
+      },
+      "dispute_resolution": {
+        "authored_by": "Concordia Protocol",
+        "status": "pending_definition",
+        "expected_fields": [
+          "resolver_did",
+          "resolution_outcome",
+          "fulfilled_with_mediation_receipt_hash"
+        ],
+        "note": "Points back to transaction_record_hash for chain continuity. Field shape pending Concordia definition."
+      }
+    },
+    "verification_recipe": [
+      "1. Extract the jws field; the remaining object is the unsigned vector.",
+      "2. Compute rfc8785.dumps(unsigned_vector); this yields canonical bytes.",
+      "3. Split jws on '.' into [header_b64, payload_b64, signature_b64].",
+      "4. Confirm base64url-decode(payload_b64) == canonical_bytes from step 2.",
+      "5. Resolve signer_did to public key via did:web:api.algovoi.co.uk -> /.well-known/did.json#verascore or /.well-known/jwks.json.",
+      "6. Verify Ed25519 signature over '{header_b64}.{payload_b64}'."
+    ]
+  },
+  "vectors": [
+    {
+      "vector_id": "cross-ext-v0-dispute-amplification-001",
+      "attack_class": "dispute_amplification",
+      "composition_layers": [
+        "settlement",
+        "reputation"
+      ],
+      "input_envelope": {
+        "escrow_id": "esc_001_amp",
+        "settlement_kind": "a2a-se",
+        "mandate_hash": "sha256:9a2e8b1c4f3d6e8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a",
+        "amount": "10.000000",
+        "currency": "USDC",
+        "rail": "algovoi",
+        "chain": "base",
+        "dispute_history": {
+          "concurrent_disputes": 47,
+          "window_seconds": 60,
+          "client_did": "did:web:malicious.example.org"
+        }
+      },
+      "expected_verdict": "BLOCK",
+      "expected_error_code": "DISPUTE_AMPLIFICATION_DETECTED",
+      "mediator_behavior": null,
+      "signer_did": "did:web:api.algovoi.co.uk",
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhdHRhY2tfY2xhc3MiOiJkaXNwdXRlX2FtcGxpZmljYXRpb24iLCJjb21wb3NpdGlvbl9sYXllcnMiOlsic2V0dGxlbWVudCIsInJlcHV0YXRpb24iXSwiZXhwZWN0ZWRfZXJyb3JfY29kZSI6IkRJU1BVVEVfQU1QTElGSUNBVElPTl9ERVRFQ1RFRCIsImV4cGVjdGVkX3ZlcmRpY3QiOiJCTE9DSyIsImlucHV0X2VudmVsb3BlIjp7ImFtb3VudCI6IjEwLjAwMDAwMCIsImNoYWluIjoiYmFzZSIsImN1cnJlbmN5IjoiVVNEQyIsImRpc3B1dGVfaGlzdG9yeSI6eyJjbGllbnRfZGlkIjoiZGlkOndlYjptYWxpY2lvdXMuZXhhbXBsZS5vcmciLCJjb25jdXJyZW50X2Rpc3B1dGVzIjo0Nywid2luZG93X3NlY29uZHMiOjYwfSwiZXNjcm93X2lkIjoiZXNjXzAwMV9hbXAiLCJtYW5kYXRlX2hhc2giOiJzaGEyNTY6OWEyZThiMWM0ZjNkNmU4YTBiMmM0ZDZlOGYwYTJiNGM2ZDhlMGYyYTRiNmM4ZDBlMmY0YTZiOGMwZDJlNGY2YSIsInJhaWwiOiJhbGdvdm9pIiwic2V0dGxlbWVudF9raW5kIjoiYTJhLXNlIn0sIm1lZGlhdG9yX2JlaGF2aW9yIjpudWxsLCJzaWduZXJfZGlkIjoiZGlkOndlYjphcGkuYWxnb3ZvaS5jby51ayIsInZlY3Rvcl9pZCI6ImNyb3NzLWV4dC12MC1kaXNwdXRlLWFtcGxpZmljYXRpb24tMDAxIn0.wijQHbNuvEgGTKPbPkkQCzN4oaKN0_1H_yfyLqPfxkmd98GfmD2rPAa1fFPu31zTYh5scI5pJvg8TquEC-GGCw"
+    },
+    {
+      "vector_id": "cross-ext-v0-synthetic-artifact-dispute-001",
+      "attack_class": "synthetic_artifact_dispute",
+      "composition_layers": [
+        "settlement"
+      ],
+      "input_envelope": {
+        "escrow_id": "esc_002_syn",
+        "settlement_kind": "a2a-se",
+        "mandate_hash": "sha256:2b4f6a8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a",
+        "amount": "25.000000",
+        "currency": "USDC",
+        "rail": "algovoi",
+        "chain": "base",
+        "dispute": {
+          "submitted_by": "did:web:client.example.org",
+          "artifact_uri": "https://example.org/artifact.bin",
+          "artifact_sha256_claimed": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "artifact_sha256_actual": "sha256:abc1def2abc1def2abc1def2abc1def2abc1def2abc1def2abc1def2abc1def2",
+          "evidence_type": "partial_corruption"
+        }
+      },
+      "expected_verdict": "REVIEW",
+      "expected_error_code": "SYNTHETIC_ARTIFACT_DETECTED",
+      "mediator_behavior": "require_artifact_hash_match",
+      "signer_did": "did:web:api.algovoi.co.uk",
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhdHRhY2tfY2xhc3MiOiJzeW50aGV0aWNfYXJ0aWZhY3RfZGlzcHV0ZSIsImNvbXBvc2l0aW9uX2xheWVycyI6WyJzZXR0bGVtZW50Il0sImV4cGVjdGVkX2Vycm9yX2NvZGUiOiJTWU5USEVUSUNfQVJUSUZBQ1RfREVURUNURUQiLCJleHBlY3RlZF92ZXJkaWN0IjoiUkVWSUVXIiwiaW5wdXRfZW52ZWxvcGUiOnsiYW1vdW50IjoiMjUuMDAwMDAwIiwiY2hhaW4iOiJiYXNlIiwiY3VycmVuY3kiOiJVU0RDIiwiZGlzcHV0ZSI6eyJhcnRpZmFjdF9zaGEyNTZfYWN0dWFsIjoic2hhMjU2OmFiYzFkZWYyYWJjMWRlZjJhYmMxZGVmMmFiYzFkZWYyYWJjMWRlZjJhYmMxZGVmMmFiYzFkZWYyYWJjMWRlZjIiLCJhcnRpZmFjdF9zaGEyNTZfY2xhaW1lZCI6InNoYTI1NjowMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwiYXJ0aWZhY3RfdXJpIjoiaHR0cHM6Ly9leGFtcGxlLm9yZy9hcnRpZmFjdC5iaW4iLCJldmlkZW5jZV90eXBlIjoicGFydGlhbF9jb3JydXB0aW9uIiwic3VibWl0dGVkX2J5IjoiZGlkOndlYjpjbGllbnQuZXhhbXBsZS5vcmcifSwiZXNjcm93X2lkIjoiZXNjXzAwMl9zeW4iLCJtYW5kYXRlX2hhc2giOiJzaGEyNTY6MmI0ZjZhOGMwZDJlNGY2YThiMGMyZDRlNmY4YTBiMmM0ZDZlOGYwYTJiNGM2ZDhlMGYyYTRiNmM4ZDBlMmY0YSIsInJhaWwiOiJhbGdvdm9pIiwic2V0dGxlbWVudF9raW5kIjoiYTJhLXNlIn0sIm1lZGlhdG9yX2JlaGF2aW9yIjoicmVxdWlyZV9hcnRpZmFjdF9oYXNoX21hdGNoIiwic2lnbmVyX2RpZCI6ImRpZDp3ZWI6YXBpLmFsZ292b2kuY28udWsiLCJ2ZWN0b3JfaWQiOiJjcm9zcy1leHQtdjAtc3ludGhldGljLWFydGlmYWN0LWRpc3B1dGUtMDAxIn0.QTTyRPkkP0b8JGYpOpoZimZELl7BCBBWbi1W5x3mpVl1StZRQ_k1WCil93aFPt_isAWFTaTxvkdumNaswq8MBg"
+    },
+    {
+      "vector_id": "cross-ext-v0-mediator-grooming-001",
+      "attack_class": "mediator_grooming",
+      "composition_layers": [
+        "settlement",
+        "reputation"
+      ],
+      "input_envelope": {
+        "escrow_id": "esc_003_grm",
+        "settlement_kind": "a2a-se",
+        "mandate_hash": "sha256:3c5d7e9a1f3c5d7e9a1f3c5d7e9a1f3c5d7e9a1f3c5d7e9a1f3c5d7e9a1f3c5d",
+        "amount": "500.000000",
+        "currency": "USDC",
+        "rail": "algovoi",
+        "chain": "base",
+        "reputation_signal": {
+          "client_did": "did:web:groomed.example.org",
+          "win_rate_30d": 0.985,
+          "dispute_count_30d": 132,
+          "auto_allow_threshold": 0.95,
+          "value_weighted_history": false
+        }
+      },
+      "expected_verdict": "REVIEW",
+      "expected_error_code": "REPUTATION_VELOCITY_ANOMALY",
+      "mediator_behavior": "downweight_unweighted_history",
+      "signer_did": "did:web:api.algovoi.co.uk",
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhdHRhY2tfY2xhc3MiOiJtZWRpYXRvcl9ncm9vbWluZyIsImNvbXBvc2l0aW9uX2xheWVycyI6WyJzZXR0bGVtZW50IiwicmVwdXRhdGlvbiJdLCJleHBlY3RlZF9lcnJvcl9jb2RlIjoiUkVQVVRBVElPTl9WRUxPQ0lUWV9BTk9NQUxZIiwiZXhwZWN0ZWRfdmVyZGljdCI6IlJFVklFVyIsImlucHV0X2VudmVsb3BlIjp7ImFtb3VudCI6IjUwMC4wMDAwMDAiLCJjaGFpbiI6ImJhc2UiLCJjdXJyZW5jeSI6IlVTREMiLCJlc2Nyb3dfaWQiOiJlc2NfMDAzX2dybSIsIm1hbmRhdGVfaGFzaCI6InNoYTI1NjozYzVkN2U5YTFmM2M1ZDdlOWExZjNjNWQ3ZTlhMWYzYzVkN2U5YTFmM2M1ZDdlOWExZjNjNWQ3ZTlhMWYzYzVkIiwicmFpbCI6ImFsZ292b2kiLCJyZXB1dGF0aW9uX3NpZ25hbCI6eyJhdXRvX2FsbG93X3RocmVzaG9sZCI6MC45NSwiY2xpZW50X2RpZCI6ImRpZDp3ZWI6Z3Jvb21lZC5leGFtcGxlLm9yZyIsImRpc3B1dGVfY291bnRfMzBkIjoxMzIsInZhbHVlX3dlaWdodGVkX2hpc3RvcnkiOmZhbHNlLCJ3aW5fcmF0ZV8zMGQiOjAuOTg1fSwic2V0dGxlbWVudF9raW5kIjoiYTJhLXNlIn0sIm1lZGlhdG9yX2JlaGF2aW9yIjoiZG93bndlaWdodF91bndlaWdodGVkX2hpc3RvcnkiLCJzaWduZXJfZGlkIjoiZGlkOndlYjphcGkuYWxnb3ZvaS5jby51ayIsInZlY3Rvcl9pZCI6ImNyb3NzLWV4dC12MC1tZWRpYXRvci1ncm9vbWluZy0wMDEifQ.7HimHsuwkSh4muBG6JzYHI7n-auU-CjE4HYJ__GHGhfl85gGycO3j48bUCLXdKMSpOx2-1_pVTXoeyLFKLgUBA"
+    },
+    {
+      "vector_id": "cross-ext-v0-escrow-double-release-001",
+      "attack_class": "escrow_double_release",
+      "composition_layers": [
+        "settlement"
+      ],
+      "input_envelope": {
+        "escrow_id": "esc_004_dbl",
+        "settlement_kind": "a2a-se",
+        "mandate_hash": "sha256:4d6e8f0a2b4d6e8f0a2b4d6e8f0a2b4d6e8f0a2b4d6e8f0a2b4d6e8f0a2b4d6e",
+        "amount": "100.000000",
+        "currency": "USDC",
+        "rail": "algovoi",
+        "chain": "base",
+        "release_attempts": [
+          {
+            "trigger": "task_state_completed",
+            "ts": "2026-05-19T05:00:00Z"
+          },
+          {
+            "trigger": "manual_mediator_release",
+            "ts": "2026-05-19T05:00:02Z"
+          }
+        ]
+      },
+      "expected_verdict": "BLOCK",
+      "expected_error_code": "RELEASE_IDEMPOTENCY_VIOLATION",
+      "mediator_behavior": null,
+      "signer_did": "did:web:api.algovoi.co.uk",
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhdHRhY2tfY2xhc3MiOiJlc2Nyb3dfZG91YmxlX3JlbGVhc2UiLCJjb21wb3NpdGlvbl9sYXllcnMiOlsic2V0dGxlbWVudCJdLCJleHBlY3RlZF9lcnJvcl9jb2RlIjoiUkVMRUFTRV9JREVNUE9URU5DWV9WSU9MQVRJT04iLCJleHBlY3RlZF92ZXJkaWN0IjoiQkxPQ0siLCJpbnB1dF9lbnZlbG9wZSI6eyJhbW91bnQiOiIxMDAuMDAwMDAwIiwiY2hhaW4iOiJiYXNlIiwiY3VycmVuY3kiOiJVU0RDIiwiZXNjcm93X2lkIjoiZXNjXzAwNF9kYmwiLCJtYW5kYXRlX2hhc2giOiJzaGEyNTY6NGQ2ZThmMGEyYjRkNmU4ZjBhMmI0ZDZlOGYwYTJiNGQ2ZThmMGEyYjRkNmU4ZjBhMmI0ZDZlOGYwYTJiNGQ2ZSIsInJhaWwiOiJhbGdvdm9pIiwicmVsZWFzZV9hdHRlbXB0cyI6W3sidHJpZ2dlciI6InRhc2tfc3RhdGVfY29tcGxldGVkIiwidHMiOiIyMDI2LTA1LTE5VDA1OjAwOjAwWiJ9LHsidHJpZ2dlciI6Im1hbnVhbF9tZWRpYXRvcl9yZWxlYXNlIiwidHMiOiIyMDI2LTA1LTE5VDA1OjAwOjAyWiJ9XSwic2V0dGxlbWVudF9raW5kIjoiYTJhLXNlIn0sIm1lZGlhdG9yX2JlaGF2aW9yIjpudWxsLCJzaWduZXJfZGlkIjoiZGlkOndlYjphcGkuYWxnb3ZvaS5jby51ayIsInZlY3Rvcl9pZCI6ImNyb3NzLWV4dC12MC1lc2Nyb3ctZG91YmxlLXJlbGVhc2UtMDAxIn0.lNLyre4_5p3HApoKHyl2ynvJhjRz6SrvtXTcx9opABNRmPQK540KuAihX543lOPf0h40nY7lIdr0WWSeK6oVBQ"
+    },
+    {
+      "vector_id": "cross-ext-v0-refund-replay-001",
+      "attack_class": "refund_replay",
+      "composition_layers": [
+        "settlement"
+      ],
+      "input_envelope": {
+        "escrow_id": "esc_005_rep",
+        "settlement_kind": "a2a-se",
+        "mandate_hash": "sha256:5e7f9a1b3c5e7f9a1b3c5e7f9a1b3c5e7f9a1b3c5e7f9a1b3c5e7f9a1b3c5e7f",
+        "amount": "75.000000",
+        "currency": "USDC",
+        "rail": "algovoi",
+        "chain": "base",
+        "refund_authorization": {
+          "original_escrow_id": "esc_PRIOR_settled",
+          "replayed_against_escrow_id": "esc_005_rep",
+          "tampered_field": "escrow_id",
+          "signed_by_original_signer": true
+        }
+      },
+      "expected_verdict": "BLOCK",
+      "expected_error_code": "REFUND_AUTHORIZATION_REPLAY",
+      "mediator_behavior": null,
+      "signer_did": "did:web:api.algovoi.co.uk",
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhdHRhY2tfY2xhc3MiOiJyZWZ1bmRfcmVwbGF5IiwiY29tcG9zaXRpb25fbGF5ZXJzIjpbInNldHRsZW1lbnQiXSwiZXhwZWN0ZWRfZXJyb3JfY29kZSI6IlJFRlVORF9BVVRIT1JJWkFUSU9OX1JFUExBWSIsImV4cGVjdGVkX3ZlcmRpY3QiOiJCTE9DSyIsImlucHV0X2VudmVsb3BlIjp7ImFtb3VudCI6Ijc1LjAwMDAwMCIsImNoYWluIjoiYmFzZSIsImN1cnJlbmN5IjoiVVNEQyIsImVzY3Jvd19pZCI6ImVzY18wMDVfcmVwIiwibWFuZGF0ZV9oYXNoIjoic2hhMjU2OjVlN2Y5YTFiM2M1ZTdmOWExYjNjNWU3ZjlhMWIzYzVlN2Y5YTFiM2M1ZTdmOWExYjNjNWU3ZjlhMWIzYzVlN2YiLCJyYWlsIjoiYWxnb3ZvaSIsInJlZnVuZF9hdXRob3JpemF0aW9uIjp7Im9yaWdpbmFsX2VzY3Jvd19pZCI6ImVzY19QUklPUl9zZXR0bGVkIiwicmVwbGF5ZWRfYWdhaW5zdF9lc2Nyb3dfaWQiOiJlc2NfMDA1X3JlcCIsInNpZ25lZF9ieV9vcmlnaW5hbF9zaWduZXIiOnRydWUsInRhbXBlcmVkX2ZpZWxkIjoiZXNjcm93X2lkIn0sInNldHRsZW1lbnRfa2luZCI6ImEyYS1zZSJ9LCJtZWRpYXRvcl9iZWhhdmlvciI6bnVsbCwic2lnbmVyX2RpZCI6ImRpZDp3ZWI6YXBpLmFsZ292b2kuY28udWsiLCJ2ZWN0b3JfaWQiOiJjcm9zcy1leHQtdjAtcmVmdW5kLXJlcGxheS0wMDEifQ.igRWuzmOMPfpfzgV10PBijfltHUJYw-9k96_ZWfJNGo6D1iRFUUuLJRoSROw8RI0giVm5tUeO50h-CjIKNUpCw"
+    }
+  ]
+}
