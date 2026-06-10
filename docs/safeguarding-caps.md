@@ -12,9 +12,11 @@ Caps do not prevent the attack. They bound the blast radius per identity so the 
 
 ## Layering
 
-Caps live in the trust/authorization overlay, not the rail. The rail moves funds mechanically (`release` / `refund`); the overlay decides whether a new escrow or dispute is allowed to exist given the identity's current exposure. This keeps the cap regime composable with any escrow design — an operator can adopt this appendix without adopting A2A-SE's exchange, and vice versa.
+Caps live in the trust/authorization overlay, not the rail. The rail moves funds mechanically (`release` / `refund`); the overlay decides whether a new escrow or dispute is allowed to exist given the identity's current exposure. This keeps the cap regime composable with any custody surface — an operator can adopt this appendix without adopting A2A-SE's exchange, and vice versa.
 
-AlgoVoi ships this in production under UK MLR 2017 alignment. Their numbers are the reference point throughout: **£100 per mandate, £300 per account, max 3 active mandates per human principal.** Nothing in this appendix requires those specific values — they are one regulator-aligned instantiation.
+AlgoVoi's in-development agent-mandate rail (APM) uses this pattern for a prepaid-balance custodial model under UK EMR 2011 safeguarding alignment (regs 20-21, with PSR 2017 reg 23 for non-e-money payment funds). Their configured numbers are the reference point throughout: **£100 per mandate, £300 per account, max 3 active mandates per human principal.** Nothing in this appendix requires those specific values — they are one regulator-aligned design.
+
+That distinction matters. AlgoVoi's live x402 / MPP / AP2 / A2A gateways and Recurr rails are non-custodial and do not hold customer funds; the caps described here belong to the in-development custodial APM rail. Operators that hold balances or otherwise create a custodial surface inherit both sides of the problem: AML controls under MLR 2017 and safeguarding controls under EMR 2011. Caps bound exposure while that authorization work proceeds; they do not replace it.
 
 ## Cap taxonomy
 
@@ -22,13 +24,13 @@ Three caps, enforced at escrow creation and dispute filing:
 
 ### 1. Per-escrow cap (`max_escrow_amount`)
 
-Upper bound on the value of any single escrow an identity may open. Reference value: £100 (AlgoVoi per-mandate cap).
+Upper bound on the value of any single escrow or prepaid mandate an identity may open. Reference value: £100 (AlgoVoi per-mandate cap).
 
 Enforcement point: `POST /exchange/escrow` — reject with `ESCROW_CAP_EXCEEDED` if `amount > max_escrow_amount` for the requesting identity's tier.
 
 ### 2. Aggregate exposure cap (`max_active_exposure`)
 
-Upper bound on the *sum* of all non-terminal escrows (status `held`, `evidence_pending`, `disputed`) attributable to one identity. Reference value: £300.
+Upper bound on the *sum* of all non-terminal escrows (status `held`, `evidence_pending`, `disputed`) or prepaid custodial balances attributable to one identity. Reference value: £300.
 
 This is the cap that actually bounds dispute-DoS: an attacker who disputes everything they touch can freeze at most `max_active_exposure` per identity, regardless of how many escrows they fragment it into.
 
@@ -36,7 +38,7 @@ Enforcement point: `POST /exchange/escrow` — reject with `EXPOSURE_CAP_EXCEEDE
 
 ### 3. Concurrency cap (`max_active_escrows`)
 
-Upper bound on the *count* of non-terminal escrows per identity. Reference value: 3 (AlgoVoi max-3 active mandates).
+Upper bound on the *count* of non-terminal escrows or active mandates per identity. Reference value: 3 (AlgoVoi max-3 active mandates).
 
 Value caps alone leave a griefing path: many tiny escrows, each individually disputed, each consuming mediator attention. The concurrency cap closes it. Mediator time is the scarce resource the amount caps don't protect.
 
@@ -73,11 +75,13 @@ Operators declare their cap regime in the Agent Card extension block, alongside 
 "a2a-se": {
   "rail": "a2a-se-exchange",
   "safeguarding": {
-    "regime": "uk-mlr-2017",
+    "regime": "uk-emr-2011",
     "currency": "GBP",
     "max_escrow_amount": "100.00",
     "max_active_exposure": "300.00",
     "max_active_escrows": 3,
+    "fx_rate_source": "operator-declared",
+    "fx_rate_sampled_at": "2026-06-10T12:00:00Z",
     "dispute_stake_pct": 10,
     "mediation_timeout_seconds": 604800
   }
@@ -85,6 +89,8 @@ Operators declare their cap regime in the Agent Card extension block, alongside 
 ```
 
 `regime` is informational (which regulatory alignment, if any, the values derive from). The numeric fields are what counterparties consume: a client agent deciding whether to open a £500 escrow can see *before creating it* that the operator will reject it, and can split or renegotiate instead of failing at runtime.
+
+When caps are denominated in one currency and settlement happens in another, the cap check is a creation-time admission decision. Operators SHOULD declare the FX rate source and sample time they used for cap evaluation so the decision does not change underneath an in-flight escrow or mandate.
 
 Operators that enforce no caps MUST omit the `safeguarding` block rather than declaring null values — absence is a signal counterparties can price in.
 
@@ -101,14 +107,15 @@ These vector definitions are the natural follow-up contribution to the conforman
 
 ## What this appendix does not do
 
-- It does not mandate specific cap values. The £100/£300/3 set is regulator-aligned prior art, not a requirement.
+- It does not mandate specific cap values. The £100/£300/3 set is regulator-aligned design prior art, not a requirement.
+- It does not substitute for EMR safeguarding authorization or MLR AML controls where an operator holds customer funds.
 - It does not solve identity. Caps inherit the strength of the identity layer beneath them.
 - It does not replace mediator integrity work. `mediator_grooming` and `synthetic_artifact_dispute` need mediator-side defenses; caps only bound what a compromised mediation path can cost.
 - It does not cover cascade-refund semantics in multi-agent pipelines (msaleme's fourth point in #1576). That interacts with caps — a cascade refund can momentarily spike an identity's active exposure — but it needs its own treatment.
 
 ## Open questions for co-authors
 
-1. **Currency normalization.** Caps in GBP, escrows in USDC — whose FX rate, sampled when? Cap evaluation at escrow-creation time with the operator's declared rate seems right, but it should be explicit.
+1. **Currency normalization.** Caps in GBP, escrows in USDC — whose FX rate, sampled when? Cap evaluation at escrow-creation time with the operator's declared rate is the recommended path; the remaining question is whether `fx_rate_source` and `fx_rate_sampled_at` are sufficient declaration fields.
 2. **Tier schedule.** Should the appendix define named tiers (e.g. `floor` / `verified` / `institutional`) with multipliers, or leave tiering entirely operator-defined and only standardize the declaration shape?
 3. **Stake custody.** Does the dispute stake go into the same escrow rail (recursive, clean) or a separate operator account (simpler, less trustless)? Leaning recursive.
 4. **Per-counterparty caps.** Worth a fourth cap bounding exposure between a single requester/provider pair? Catches bilateral wash patterns that aggregate caps miss, at the cost of more state.
