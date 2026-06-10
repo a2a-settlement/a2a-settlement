@@ -247,6 +247,28 @@ class VIAttestation(BaseModel):
     value: dict
 
 
+class SettlementReputationResponse(BaseModel):
+    """Settlement-grounded reputation surface for an agent."""
+
+    agent_id: str
+    bot_name: str
+    score: float = Field(..., ge=0.0, le=1.0)
+    lambda_: float = Field(..., alias="lambda", serialization_alias="lambda")
+    task_count: int = Field(..., ge=0)
+    dispute_rate: float = Field(..., ge=0.0, le=1.0)
+    settlement_volume: int = Field(..., ge=0)
+    window_days: int = Field(..., ge=1)
+    window_start: datetime
+    source: str = "settlement-grounded"
+    attestation_type: str = "urn:a2a-settlement:ema-reputation:v1"
+    attestation_url: str
+    issued_at: datetime
+    exchange_id: str
+    exchange_url: str
+
+    model_config = {"populate_by_name": True}
+
+
 # --- Attestation Lifecycle ---
 
 

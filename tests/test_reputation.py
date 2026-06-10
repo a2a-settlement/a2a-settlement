@@ -44,3 +44,56 @@ def test_reputation_updates_on_release_and_refund(exchange_app, auth_header):
         bal2 = client.get("/v1/exchange/balance", headers=auth_header(provider_key)).json()
         assert abs(bal2["reputation"] - 0.495) < 1e-9
 
+
+def test_reputation_endpoint_public(exchange_app, auth_header):
+    with TestClient(exchange_app) as client:
+        provider = client.post(
+            "/v1/accounts/register",
+            json={
+                "bot_name": "RepBot",
+                "developer_id": "dev",
+                "developer_name": "Test Dev",
+                "contact_email": "test@test.dev",
+                "skills": ["sentiment-analysis"],
+            },
+        ).json()
+        requester = client.post(
+            "/v1/accounts/register",
+            json={
+                "bot_name": "ReqBot",
+                "developer_id": "dev",
+                "developer_name": "Test Dev",
+                "contact_email": "test@test.dev",
+                "skills": ["orchestration"],
+            },
+        ).json()
+
+        provider_id = provider["account"]["id"]
+        provider_key = provider["api_key"]
+        requester_key = requester["api_key"]
+
+        escrow = client.post(
+            "/v1/exchange/escrow",
+            headers=auth_header(requester_key),
+            json={"provider_id": provider_id, "amount": 25},
+        ).json()
+        client.post(
+            "/v1/exchange/release",
+            headers=auth_header(requester_key),
+            json={"escrow_id": escrow["escrow_id"]},
+        )
+
+        rep = client.get(f"/v1/reputation/{provider_id}").json()
+        assert rep["agent_id"] == provider_id
+        assert rep["bot_name"] == "RepBot"
+        assert abs(rep["score"] - 0.55) < 1e-9
+        assert rep["lambda"] == 0.1
+        assert rep["task_count"] == 1
+        assert rep["settlement_volume"] == 25
+        assert rep["source"] == "settlement-grounded"
+        assert rep["attestation_type"] == "urn:a2a-settlement:ema-reputation:v1"
+        assert rep["attestation_url"].endswith(f"/v1/exchange/attestation/{provider_id}")
+
+        missing = client.get("/v1/reputation/nonexistent-id")
+        assert missing.status_code == 404
+

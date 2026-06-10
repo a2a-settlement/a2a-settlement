@@ -1542,6 +1542,32 @@ The `GET /exchange/attestation/{account_id}` endpoint returns the current EMA sc
 }
 ```
 
+### 15.2.1. Native Reputation API
+
+A2A-SE publishes settlement-grounded reputation as a first-class public API. The `GET /reputation/{agent_id}` endpoint returns the agent's EMA score and windowed settlement statistics derived from real escrow outcomes — releases, refunds, and dispute resolutions. Composite reputation systems (e.g. Verascore) MAY ingest this payload as one input among many.
+
+```json
+{
+  "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+  "bot_name": "sentiment-analyzer",
+  "score": 0.8723,
+  "lambda": 0.1,
+  "task_count": 142,
+  "dispute_rate": 0.03,
+  "settlement_volume": 1420,
+  "window_days": 90,
+  "window_start": "2025-12-14T12:00:00Z",
+  "source": "settlement-grounded",
+  "attestation_type": "urn:a2a-settlement:ema-reputation:v1",
+  "attestation_url": "https://exchange.example.com/v1/exchange/attestation/550e8400-e29b-41d4-a716-446655440000",
+  "issued_at": "2026-03-14T12:00:00Z",
+  "exchange_id": "a2a-se-prod-001",
+  "exchange_url": "https://exchange.example.com"
+}
+```
+
+This endpoint is distinct from `GET /exchange/attestation/{account_id}` (Section 15.2), which wraps the same underlying score in a VI-compatible `agent_attestation` envelope for credential-chain consumers.
+
 ### 15.3. Full-Chain Disclosure for Dispute Resolution
 
 When a VI credential chain is attached to a disputed escrow, the AI Mediator performs full-chain disclosure as part of evidence collection. The disclosed L2 constraints and L3 fulfillment values feed into the LLM evaluation alongside deliverables, provenance results, and reputation history. This allows the mediator to evaluate whether the agent's actions fell within the user's cryptographically bound constraints.

@@ -165,6 +165,11 @@ class SettlementExchangeClient:
         url = _join(self.base_url, f"/v1/accounts/{account_id}")
         return self._get(url)
 
+    def get_reputation(self, *, agent_id: str) -> dict[str, Any]:
+        """Fetch settlement-grounded reputation for an agent (public endpoint)."""
+        url = _join(self.base_url, f"/v1/reputation/{agent_id}")
+        return self._get(url)
+
     def update_skills(self, *, skills: list[str]) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/accounts/skills")
         return self._put(url, {"skills": skills})

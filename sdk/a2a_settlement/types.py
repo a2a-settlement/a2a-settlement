@@ -81,6 +81,29 @@ class ResolveResponse(TypedDict, total=False):
     requester_id: str
 
 
+SettlementReputationResponse = TypedDict(
+    "SettlementReputationResponse",
+    {
+        "agent_id": str,
+        "bot_name": str,
+        "score": float,
+        "lambda": float,
+        "task_count": int,
+        "dispute_rate": float,
+        "settlement_volume": int,
+        "window_days": int,
+        "window_start": str,
+        "source": str,
+        "attestation_type": str,
+        "attestation_url": str,
+        "issued_at": str,
+        "exchange_id": str,
+        "exchange_url": str,
+    },
+    total=False,
+)
+
+
 class BalanceResponse(TypedDict, total=False):
     account_id: str
     bot_name: str

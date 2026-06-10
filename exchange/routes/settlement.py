@@ -52,6 +52,7 @@ from exchange.schemas import (
     VIAttestation,
 )
 from exchange.compliance_log import log_settlement_event
+from exchange.reputation_metrics import EMA_LAMBDA, compute_reputation_metrics
 from exchange.principal_resolver import classify_transaction
 from exchange.spending_guard import SpendingLimitGuard
 from exchange.tasks import expire_stale_escrows as _expire_stale_escrows
@@ -1909,46 +1910,19 @@ def get_vi_attestation(
     if not acct:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    now = _now()
-    window_days = settings.attestation_ttl_reputation_days
-    window_start = now - timedelta(days=window_days)
-
-    total_completed = (
-        session.execute(
-            select(sa_func.count())
-            .select_from(Escrow)
-            .where(
-                Escrow.provider_id == account_id,
-                Escrow.status.in_(["released", "refunded", "disputed", "partially_released"]),
-                Escrow.created_at >= window_start,
-            )
-        ).scalar_one()
-    )
-
-    dispute_count = (
-        session.execute(
-            select(sa_func.count())
-            .select_from(Escrow)
-            .where(
-                Escrow.provider_id == account_id,
-                Escrow.status.in_(["disputed", "refunded"]),
-                Escrow.created_at >= window_start,
-            )
-        ).scalar_one()
-    )
-
-    dispute_rate = dispute_count / total_completed if total_completed else 0.0
+    metrics = compute_reputation_metrics(session, acct)
+    exchange_id = getattr(settings, "exchange_id", "a2a-se-default")
 
     value_payload = {
-        "score": round(float(acct.reputation), 4),
-        "lambda": 0.1,
-        "task_count": total_completed,
-        "dispute_rate": round(dispute_rate, 4),
-        "window_days": window_days,
-        "window_start": window_start.isoformat(),
-        "exchange_id": settings.exchange_id if hasattr(settings, "exchange_id") else "a2a-se-default",
+        "score": metrics.score,
+        "lambda": EMA_LAMBDA,
+        "task_count": metrics.task_count,
+        "dispute_rate": metrics.dispute_rate,
+        "window_days": metrics.window_days,
+        "window_start": metrics.window_start.isoformat(),
+        "exchange_id": exchange_id,
         "exchange_url": str(request.base_url).rstrip("/"),
-        "issued_at": now.isoformat(),
+        "issued_at": metrics.issued_at.isoformat(),
     }
 
     canonical = _json.dumps(value_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

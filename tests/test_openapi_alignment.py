@@ -71,6 +71,7 @@ def test_all_schema_names_present(exchange_app):
         "DisputeResponse",
         "BalanceResponse",
         "HealthResponse",
+        "SettlementReputationResponse",
     }
     for name in key_schemas:
         assert name in hand_schemas, f"{name} missing from openapi.yaml"

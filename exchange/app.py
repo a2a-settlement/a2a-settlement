@@ -147,6 +147,9 @@ def create_app() -> FastAPI:
 
     api_router = APIRouter()
     api_router.include_router(accounts.router)
+    from exchange.routes import reputation as reputation_mod
+
+    api_router.include_router(reputation_mod.router)
     api_router.include_router(settlement.router)
     api_router.include_router(attestations.router)
     api_router.include_router(stats.router)

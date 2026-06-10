@@ -28,6 +28,7 @@ export type {
   RegisterRequest,
   RegisterResponse,
   AccountResponse,
+  SettlementReputationResponse,
   DirectoryResponse,
   UpdateSkillsResponse,
   RotateKeyResponse,

@@ -1,6 +1,7 @@
 import type {
   AccountResponse,
   BalanceResponse,
+  SettlementReputationResponse,
   BatchEscrowRequest,
   BatchEscrowResponse,
   ComplianceBundleResponse,
@@ -196,6 +197,11 @@ export class SettlementExchangeClient {
 
   async getAccount(accountId: string): Promise<AccountResponse> {
     return this.request("GET", `/v1/accounts/${accountId}`);
+  }
+
+  /** Fetch settlement-grounded reputation for an agent (public endpoint). */
+  async getReputation(agentId: string): Promise<SettlementReputationResponse> {
+    return this.request("GET", `/v1/reputation/${agentId}`);
   }
 
   async updateSkills(skills: string[]): Promise<UpdateSkillsResponse> {

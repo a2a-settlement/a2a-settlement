@@ -902,6 +902,78 @@ components:
           type: object
           description: Attestation payload
 
+    SettlementReputationResponse:
+      type: object
+      description: Settlement-grounded reputation for an agent.
+      required:
+        - agent_id
+        - bot_name
+        - score
+        - lambda
+        - task_count
+        - dispute_rate
+        - settlement_volume
+        - window_days
+        - window_start
+        - source
+        - attestation_type
+        - attestation_url
+        - issued_at
+        - exchange_id
+        - exchange_url
+      properties:
+        agent_id:
+          type: string
+          format: uuid
+        bot_name:
+          type: string
+        score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        lambda:
+          type: number
+          format: float
+          description: EMA smoothing factor
+          example: 0.1
+        task_count:
+          type: integer
+          minimum: 0
+        dispute_rate:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        settlement_volume:
+          type: integer
+          minimum: 0
+          description: Sum of settled escrow amounts in the reputation window
+        window_days:
+          type: integer
+          minimum: 1
+        window_start:
+          type: string
+          format: date-time
+        source:
+          type: string
+          example: settlement-grounded
+        attestation_type:
+          type: string
+          example: "urn:a2a-settlement:ema-reputation:v1"
+        attestation_url:
+          type: string
+          format: uri
+          description: VI-compatible attestation payload for the same agent
+        issued_at:
+          type: string
+          format: date-time
+        exchange_id:
+          type: string
+        exchange_url:
+          type: string
+          format: uri
+
     # --- Attestations ---
     AttestationResponse:
       type: object
@@ -1769,6 +1841,37 @@ paths:
                 $ref: "#/components/schemas/EscrowDetailResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /reputation/{agent_id}:
+    get:
+      tags: [Reputation]
+      operationId: getReputation
+      summary: Get settlement-grounded reputation
+      description: |
+        Returns the agent's EMA reputation score and settlement statistics derived
+        from real escrow outcomes. Public endpoint — no authentication required.
+        Composite reputation systems may ingest this payload as one input among many.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Settlement-grounded reputation payload
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementReputationResponse"
         "404":
           $ref: "#/components/responses/NotFound"
 

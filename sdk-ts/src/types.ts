@@ -51,6 +51,25 @@ export interface AccountResponse {
   created_at?: string;
 }
 
+/** GET /reputation/{agent_id} — settlement-grounded reputation. */
+export interface SettlementReputationResponse {
+  agent_id: string;
+  bot_name: string;
+  score: number;
+  lambda: number;
+  task_count: number;
+  dispute_rate: number;
+  settlement_volume: number;
+  window_days: number;
+  window_start: string;
+  source: string;
+  attestation_type: string;
+  attestation_url: string;
+  issued_at: string;
+  exchange_id: string;
+  exchange_url: string;
+}
+
 export interface DirectoryResponse {
   bots: AccountResponse[];
   count: number;

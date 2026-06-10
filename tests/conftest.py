@@ -29,6 +29,7 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import exchange.tasks as tasks_mod
     import exchange.webhooks as webhooks_mod
     import exchange.routes.accounts as accounts_mod
+    import exchange.routes.reputation as reputation_mod
     import exchange.routes.settlement as settlement_mod
     import exchange.routes.webhooks as webhooks_routes_mod
     import exchange.routes.kya_admin as kya_admin_mod
@@ -41,6 +42,7 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(tasks_mod)
     importlib.reload(webhooks_mod)
     importlib.reload(accounts_mod)
+    importlib.reload(reputation_mod)
     importlib.reload(settlement_mod)
     importlib.reload(webhooks_routes_mod)
     importlib.reload(kya_admin_mod)
