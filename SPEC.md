@@ -1,6 +1,6 @@
 # A2A Settlement Extension (A2A-SE)
 
-Specification v0.9.0
+Specification v0.11.0
 
 Extension URI: `https://a2a-settlement.org/extensions/settlement/v1`
 
@@ -1268,6 +1268,28 @@ This is not a logging feature. It is a regulatory moat.
 
 When enterprise procurement asks "how do we prove what our agents did last Tuesday?", A2A-SE is the only agent infrastructure with a cryptographically verifiable answer out of the box. Every other agent framework treats audit as an afterthought. A2A-SE provides immutable, timestamped, Merkle-backed records of every credential access, every proxied request, and every settlement -- sufficient for SEC 17a-4, SOC 2, and regulatory compliance review.
 
+### 11.4. Typed Escrow Outcome Attestations
+
+A2A-SE defines three settlement outcome attestation types as canonical evidence classes:
+
+| URN | Meaning |
+|-----|---------|
+| `urn:a2a-se:escrow-release-attestation:v1` | Escrow release, partial release, holdback release, or instant settlement |
+| `urn:a2a-se:escrow-refund-attestation:v1` | Escrow refund, holdback refund, or dependent auto-refund |
+| `urn:a2a-se:dispute-resolution-attestation:v1` | Operator or mediator dispute resolution |
+
+Each payload carries a shared `settlement` object with `escrow_id`, `settlement_kind: "a2a-se"`, requester/provider `did:a2a:` party refs, amount, fee, currency, rail, task metadata, self-dealing class, and timestamp. The payload is serialized with deterministic JSON (excluding `proof`), hashed with SHA-256, and appended to the exchange Merkle tree.
+
+Downstream consumers -- including composite reputation systems, Concordia-style receipt substrates, and cross-extension conformance harnesses -- SHOULD reference these URNs as the canonical A2A-SE evidence classes rather than redefining settlement outcome shape. JSON Schemas are published under `schemas/`, and the citable schema guide is `docs/attestation-schemas.md`.
+
+The public retrieval endpoint is:
+
+```http
+GET /exchange/escrow/{escrow_id}/attestations
+```
+
+The response includes the typed payload, `schema_id`, leaf index, data hash, Merkle root, and sibling proof.
+
 ---
 
 ## 12. Adoption Path
@@ -1627,6 +1649,13 @@ The EMA reputation scoring endpoint (`GET /exchange/attestation/{account_id}`) f
 ---
 
 ## 17. Changelog
+
+### v0.11.0 (2026-06-10)
+
+- Added typed escrow outcome attestation URNs for release, refund, and dispute resolution.
+- Added checked-in JSON Schemas for escrow outcome attestations.
+- Added `GET /exchange/escrow/{escrow_id}/attestations` for public Merkle-backed retrieval.
+- Documented cross-extension mapping for settlement evidence consumers.
 
 ### v0.10.0 (2026-03-16)
 

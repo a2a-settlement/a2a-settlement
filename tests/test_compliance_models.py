@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -9,9 +10,19 @@ from compliance.models import (
     AP2MandateBinding,
     AttestationHeader,
     CryptographicProof,
+    DISPUTE_RESOLUTION_ATTESTATION_SCHEMA_ID,
+    ESCROW_REFUND_ATTESTATION_SCHEMA_ID,
+    ESCROW_RELEASE_ATTESTATION_SCHEMA_ID,
+    DisputeResolutionAttestation,
+    EscrowRefundAttestation,
+    EscrowReleaseAttestation,
     MediationState,
+    PartyRef,
     PreDisputeAttestationPayload,
+    SettlementCore,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_payload(**overrides):
@@ -143,3 +154,83 @@ class TestPreDisputeAttestationPayload:
         p = _make_payload()
         with pytest.raises(ValidationError):
             p.header = AttestationHeader(issuer_id="other")
+
+
+def _settlement_core() -> SettlementCore:
+    return SettlementCore(
+        escrow_id="esc-001",
+        requester=PartyRef(did="did:a2a:req", account_id="req"),
+        provider=PartyRef(did="did:a2a:prov", account_id="prov"),
+        amount=100,
+        fee_amount=1,
+        task_id="task-1",
+        self_dealing_class="arms_length",
+    )
+
+
+class TestTypedEscrowAttestations:
+    def test_release_canonical_bytes_excludes_proof(self):
+        att = EscrowReleaseAttestation(
+            header=AttestationHeader(
+                issuer_id="exchange",
+                schema_id=ESCROW_RELEASE_ATTESTATION_SCHEMA_ID,
+            ),
+            settlement=_settlement_core(),
+            amount_paid=100,
+            fee_collected=1,
+            proof=CryptographicProof(
+                payload_hash="abc",
+                merkle_root="def",
+                merkle_leaf_index=0,
+            ),
+        )
+        raw = json.loads(att.canonical_bytes())
+        assert raw["header"]["schema_id"] == ESCROW_RELEASE_ATTESTATION_SCHEMA_ID
+        assert raw["settlement"]["settlement_kind"] == "a2a-se"
+        assert "proof" not in raw
+
+    def test_refund_canonical_bytes_deterministic(self):
+        kwargs = dict(
+            header=AttestationHeader(
+                issuer_id="exchange",
+                schema_id=ESCROW_REFUND_ATTESTATION_SCHEMA_ID,
+            ),
+            settlement=_settlement_core(),
+            amount_returned=101,
+            refund_reason="cancelled",
+        )
+        assert (
+            EscrowRefundAttestation(**kwargs).canonical_bytes()
+            == EscrowRefundAttestation(**kwargs).canonical_bytes()
+        )
+
+    def test_dispute_resolution_schema_id(self):
+        att = DisputeResolutionAttestation(
+            header=AttestationHeader(
+                issuer_id="exchange",
+                schema_id=DISPUTE_RESOLUTION_ATTESTATION_SCHEMA_ID,
+            ),
+            settlement=_settlement_core(),
+            resolution="release",
+            resolution_strategy="manual",
+            amount_paid=100,
+            fee_collected=1,
+        )
+        raw = json.loads(att.canonical_bytes())
+        assert raw["header"]["schema_id"] == DISPUTE_RESOLUTION_ATTESTATION_SCHEMA_ID
+        assert raw["resolution"] == "release"
+
+
+class TestCheckedInJsonSchemas:
+    @pytest.mark.parametrize(
+        ("filename", "model"),
+        [
+            ("escrow-release-attestation.v1.json", EscrowReleaseAttestation),
+            ("escrow-refund-attestation.v1.json", EscrowRefundAttestation),
+            ("dispute-resolution-attestation.v1.json", DisputeResolutionAttestation),
+        ],
+    )
+    def test_schema_files_match_models(self, filename, model):
+        expected = json.dumps(model.model_json_schema(), indent=2, sort_keys=True) + "\n"
+        actual = (REPO_ROOT / "schemas" / filename).read_text()
+        assert actual == expected

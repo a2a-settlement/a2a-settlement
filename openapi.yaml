@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: A2A Settlement Exchange API
-  version: 0.10.0
+  version: 0.11.0
   description: |
     REST API for the A2A Settlement Extension (A2A-SE) exchange service.
     Provides escrow-based settlement for the Agent2Agent protocol.
@@ -781,6 +781,53 @@ components:
             $ref: "#/components/schemas/EscrowDetailResponse"
         total:
           type: integer
+
+    MerkleProofItem:
+      type: object
+      required: [sibling_hash, side]
+      properties:
+        sibling_hash:
+          type: string
+        side:
+          type: string
+          enum: [left, right]
+
+    EscrowAttestationItem:
+      type: object
+      required: [leaf_index, data_hash, created_at, merkle_root, proof, schema_id, payload]
+      properties:
+        leaf_index:
+          type: integer
+          minimum: 0
+        data_hash:
+          type: string
+        created_at:
+          type: string
+        merkle_root:
+          type: string
+        proof:
+          type: array
+          items:
+            $ref: "#/components/schemas/MerkleProofItem"
+        schema_id:
+          type: string
+          example: "urn:a2a-se:escrow-release-attestation:v1"
+        payload:
+          type: object
+          additionalProperties: true
+
+    EscrowAttestationsResponse:
+      type: object
+      required: [enabled, escrow_id, attestations]
+      properties:
+        enabled:
+          type: boolean
+        escrow_id:
+          type: string
+        attestations:
+          type: array
+          items:
+            $ref: "#/components/schemas/EscrowAttestationItem"
 
     # --- Webhooks ---
     WebhookSetRequest:
@@ -1843,6 +1890,35 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /exchange/escrow/{escrow_id}/attestations:
+    get:
+      tags: [Settlement]
+      operationId: getEscrowAttestations
+      summary: Get escrow attestation records
+      description: |
+        Returns Merkle-backed typed escrow attestation payloads for an escrow.
+        Public endpoint — no authentication required. Empty when compliance
+        logging is disabled or no leaves exist for the escrow.
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: escrow_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Escrow attestation records
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscrowAttestationsResponse"
 
   /reputation/{agent_id}:
     get:

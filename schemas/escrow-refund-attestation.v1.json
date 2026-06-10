@@ -1,0 +1,260 @@
+{
+  "$defs": {
+    "AttestationHeader": {
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "issuer_id": {
+          "title": "Issuer Id",
+          "type": "string"
+        },
+        "nonce": {
+          "title": "Nonce",
+          "type": "string"
+        },
+        "schema_id": {
+          "default": "urn:a2a-se:pre-dispute-attestation:v1",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "version": {
+          "default": "1.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issuer_id"
+      ],
+      "title": "AttestationHeader",
+      "type": "object"
+    },
+    "CryptographicProof": {
+      "properties": {
+        "merkle_leaf_index": {
+          "title": "Merkle Leaf Index",
+          "type": "integer"
+        },
+        "merkle_root": {
+          "title": "Merkle Root",
+          "type": "string"
+        },
+        "payload_hash": {
+          "title": "Payload Hash",
+          "type": "string"
+        },
+        "tsa_authority_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tsa Authority Url"
+        },
+        "tsa_timestamp_token": {
+          "anyOf": [
+            {
+              "format": "binary",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tsa Timestamp Token"
+        }
+      },
+      "required": [
+        "payload_hash",
+        "merkle_root",
+        "merkle_leaf_index"
+      ],
+      "title": "CryptographicProof",
+      "type": "object"
+    },
+    "PartyRef": {
+      "properties": {
+        "account_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Account Id"
+        },
+        "did": {
+          "title": "Did",
+          "type": "string"
+        },
+        "external_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "External Ids",
+          "type": "object"
+        }
+      },
+      "required": [
+        "did"
+      ],
+      "title": "PartyRef",
+      "type": "object"
+    },
+    "SettlementCore": {
+      "properties": {
+        "amount": {
+          "title": "Amount",
+          "type": "integer"
+        },
+        "currency": {
+          "default": "ATE",
+          "title": "Currency",
+          "type": "string"
+        },
+        "escrow_id": {
+          "title": "Escrow Id",
+          "type": "string"
+        },
+        "fee_amount": {
+          "default": 0,
+          "title": "Fee Amount",
+          "type": "integer"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/PartyRef"
+        },
+        "rail": {
+          "default": "a2a-se",
+          "title": "Rail",
+          "type": "string"
+        },
+        "requester": {
+          "$ref": "#/$defs/PartyRef"
+        },
+        "self_dealing_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Dealing Class"
+        },
+        "settlement_kind": {
+          "default": "a2a-se",
+          "title": "Settlement Kind",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "task_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Type"
+        }
+      },
+      "required": [
+        "escrow_id",
+        "requester",
+        "provider",
+        "amount"
+      ],
+      "title": "SettlementCore",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "amount_returned": {
+      "title": "Amount Returned",
+      "type": "integer"
+    },
+    "header": {
+      "$ref": "#/$defs/AttestationHeader"
+    },
+    "proof": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CryptographicProof"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "refund_kind": {
+      "default": "full",
+      "enum": [
+        "full",
+        "holdback",
+        "auto_dependent"
+      ],
+      "title": "Refund Kind",
+      "type": "string"
+    },
+    "refund_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Refund Reason"
+    },
+    "reputation_attestation_type": {
+      "default": "urn:a2a-settlement:ema-reputation:v1",
+      "title": "Reputation Attestation Type",
+      "type": "string"
+    },
+    "settlement": {
+      "$ref": "#/$defs/SettlementCore"
+    }
+  },
+  "required": [
+    "header",
+    "settlement",
+    "amount_returned"
+  ],
+  "title": "EscrowRefundAttestation",
+  "type": "object"
+}

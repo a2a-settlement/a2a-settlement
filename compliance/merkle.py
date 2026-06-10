@@ -4,8 +4,11 @@ import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
-from compliance.models import PreDisputeAttestationPayload
+
+class CanonicalPayload(Protocol):
+    def canonical_bytes(self) -> bytes: ...
 
 EMPTY_ROOT = "0" * 64
 
@@ -69,7 +72,7 @@ class MerkleTree:
     def leaf_count(self) -> int:
         return self._leaf_count()
 
-    def append(self, payload: PreDisputeAttestationPayload) -> tuple[str, int]:
+    def append(self, payload: CanonicalPayload) -> tuple[str, int]:
         """Append a payload and return ``(new_root_hash, leaf_index)``."""
         canonical = payload.canonical_bytes()
         leaf_hash = _hash_leaf(canonical)
@@ -89,6 +92,41 @@ class MerkleTree:
 
         root = self._compute_root(new_count)
         return root, position
+
+    def get_leaf(self, leaf_index: int) -> dict | None:
+        """Return one leaf row with proof metadata."""
+        row = self._conn.execute(
+            "SELECT position, data_hash, payload_json, created_at "
+            "FROM merkle_leaves WHERE position = ?",
+            (leaf_index,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "leaf_index": row[0],
+            "data_hash": row[1],
+            "payload": row[2],
+            "created_at": row[3],
+            "proof": [
+                {"sibling_hash": sibling_hash, "side": side}
+                for sibling_hash, side in self.get_proof(row[0])
+            ],
+        }
+
+    def find_leaves_by_escrow(self, escrow_id: str) -> list[dict]:
+        """Return Merkle leaves whose JSON payload references *escrow_id*."""
+        pattern = f'%"{escrow_id}"%'
+        rows = self._conn.execute(
+            "SELECT position FROM merkle_leaves "
+            "WHERE payload_json LIKE ? ORDER BY position ASC",
+            (pattern,),
+        ).fetchall()
+        leaves: list[dict] = []
+        for (position,) in rows:
+            leaf = self.get_leaf(position)
+            if leaf is not None:
+                leaves.append(leaf)
+        return leaves
 
     def verify(self, leaf_index: int, data_hash: str) -> bool:
         """Verify that *data_hash* is the leaf at *leaf_index*."""

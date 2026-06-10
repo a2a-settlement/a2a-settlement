@@ -35,7 +35,7 @@ def _get_tree():
                 PreDisputeAttestationPayload,
             )
 
-            db_path = Path("compliance_merkle.db")
+            db_path = Path(getattr(settings, "compliance_db_path", "compliance_merkle.db"))
             _tree = MerkleTree(db_path)
             logger.info("Compliance Merkle tree initialized at %s", db_path)
         except ImportError:
@@ -55,6 +55,17 @@ def log_settlement_event(
     resolution_strategy: Optional[str] = None,
     grounding_chain: Optional[dict] = None,
     self_dealing_class: Optional[str] = None,
+    fee_amount: int = 0,
+    task_id: Optional[str] = None,
+    task_type: Optional[str] = None,
+    currency: str = "ATE",
+    attestation_kind: Optional[str] = None,
+    release_kind: str = "full",
+    refund_kind: str = "full",
+    refund_reason: Optional[str] = None,
+    mediator_id: Optional[str] = None,
+    resolution: Optional[str] = None,
+    stake_ruling: Optional[str] = None,
 ) -> Optional[dict]:
     """Record a settlement event in the compliance Merkle tree.
 
@@ -77,8 +88,16 @@ def log_settlement_event(
         from compliance.models import (
             AttestationHeader,
             AP2MandateBinding,
+            DISPUTE_RESOLUTION_ATTESTATION_SCHEMA_ID,
+            ESCROW_REFUND_ATTESTATION_SCHEMA_ID,
+            ESCROW_RELEASE_ATTESTATION_SCHEMA_ID,
+            DisputeResolutionAttestation,
+            EscrowRefundAttestation,
+            EscrowReleaseAttestation,
             MediationState,
+            PartyRef,
             PreDisputeAttestationPayload,
+            SettlementCore,
         )
 
         extra_strategy = resolution_strategy
@@ -95,22 +114,83 @@ def log_settlement_event(
                 f"{extra_strategy}|{sdc_tag}" if extra_strategy else sdc_tag
             )
 
-        payload = PreDisputeAttestationPayload(
-            header=AttestationHeader(
-                issuer_id="exchange",
-            ),
-            mandate=AP2MandateBinding(
-                intent_did=f"did:a2a:{requester_id}",
-                cart_did=f"urn:escrow:{escrow_id}",
-                payment_did=f"did:a2a:{provider_id}",
-            ),
-            mediation=MediationState(
-                escrow_id=escrow_id,
-                escrow_status=status,
-                dispute_reason=dispute_reason,
-                resolution_strategy=extra_strategy,
-            ),
+        requester = PartyRef(did=f"did:a2a:{requester_id}", account_id=requester_id)
+        provider = PartyRef(did=f"did:a2a:{provider_id}", account_id=provider_id)
+        settlement = SettlementCore(
+            escrow_id=escrow_id,
+            requester=requester,
+            provider=provider,
+            amount=amount,
+            fee_amount=fee_amount,
+            currency=currency,
+            task_id=task_id,
+            task_type=task_type,
+            self_dealing_class=self_dealing_class,
         )
+
+        kind = attestation_kind
+        if kind is None and event_type in {"escrow.released", "escrow.partial_release", "instant.settled"}:
+            kind = "release"
+        elif kind is None and event_type == "escrow.refunded":
+            kind = "refund"
+        elif kind is None and event_type == "escrow.resolved":
+            kind = "dispute_resolution"
+
+        if kind == "release":
+            payload = EscrowReleaseAttestation(
+                header=AttestationHeader(
+                    issuer_id="exchange",
+                    schema_id=ESCROW_RELEASE_ATTESTATION_SCHEMA_ID,
+                ),
+                settlement=settlement,
+                release_kind=release_kind,  # type: ignore[arg-type]
+                amount_paid=amount,
+                fee_collected=fee_amount,
+            )
+        elif kind == "refund":
+            payload = EscrowRefundAttestation(
+                header=AttestationHeader(
+                    issuer_id="exchange",
+                    schema_id=ESCROW_REFUND_ATTESTATION_SCHEMA_ID,
+                ),
+                settlement=settlement,
+                refund_kind=refund_kind,  # type: ignore[arg-type]
+                amount_returned=amount,
+                refund_reason=refund_reason,
+            )
+        elif kind == "dispute_resolution":
+            payload = DisputeResolutionAttestation(
+                header=AttestationHeader(
+                    issuer_id="exchange",
+                    schema_id=DISPUTE_RESOLUTION_ATTESTATION_SCHEMA_ID,
+                ),
+                settlement=settlement,
+                resolution=resolution if resolution in {"release", "refund"} else ("release" if status == "released" else "refund"),
+                mediator_id=mediator_id,
+                resolution_strategy=extra_strategy,
+                dispute_reason=dispute_reason,
+                stake_ruling=stake_ruling,
+                amount_paid=amount if status == "released" else None,
+                amount_returned=amount if status == "refunded" else None,
+                fee_collected=fee_amount if status == "released" else 0,
+            )
+        else:
+            payload = PreDisputeAttestationPayload(
+                header=AttestationHeader(
+                    issuer_id="exchange",
+                ),
+                mandate=AP2MandateBinding(
+                    intent_did=f"did:a2a:{requester_id}",
+                    cart_did=f"urn:escrow:{escrow_id}",
+                    payment_did=f"did:a2a:{provider_id}",
+                ),
+                mediation=MediationState(
+                    escrow_id=escrow_id,
+                    escrow_status=status,
+                    dispute_reason=dispute_reason,
+                    resolution_strategy=extra_strategy,
+                ),
+            )
 
         root_hash, leaf_index = tree.append(payload)
         data_hash = hashlib.sha256(payload.canonical_bytes()).hexdigest()
@@ -145,3 +225,31 @@ def get_tree_status() -> dict:
         "leaf_count": tree.leaf_count,
         "root_hash": tree.root,
     }
+
+
+def get_escrow_attestations(escrow_id: str) -> dict:
+    """Return typed Merkle attestations for an escrow."""
+    if not getattr(settings, "compliance_enabled", False):
+        return {"enabled": False, "escrow_id": escrow_id, "attestations": []}
+    tree = _get_tree()
+    if tree is None:
+        return {"enabled": False, "escrow_id": escrow_id, "attestations": []}
+
+    attestations = []
+    for leaf in tree.find_leaves_by_escrow(escrow_id):
+        payload = json.loads(leaf["payload"])
+        schema_id = payload.get("header", {}).get("schema_id")
+        if not schema_id or not schema_id.startswith("urn:a2a-se:"):
+            continue
+        attestations.append(
+            {
+                "leaf_index": leaf["leaf_index"],
+                "data_hash": leaf["data_hash"],
+                "created_at": leaf["created_at"],
+                "merkle_root": tree.root,
+                "proof": leaf["proof"],
+                "schema_id": schema_id,
+                "payload": payload,
+            }
+        )
+    return {"enabled": True, "escrow_id": escrow_id, "attestations": attestations}

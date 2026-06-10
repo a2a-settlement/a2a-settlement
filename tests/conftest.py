@@ -22,8 +22,11 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR", "0")
     monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY", "0")
     monkeypatch.setenv("A2A_EXCHANGE_INVITE_CODE", "")
+    monkeypatch.setenv("A2A_EXCHANGE_COMPLIANCE_ENABLED", "true")
+    monkeypatch.setenv("A2A_EXCHANGE_COMPLIANCE_DB_PATH", str(tmp_path / "compliance_merkle.db"))
 
     import exchange.config as config_mod
+    import exchange.compliance_log as compliance_log_mod
     import exchange.ratelimit as ratelimit_mod
     import exchange.observers as observers_mod
     import exchange.spending_guard as spending_guard_mod
@@ -37,6 +40,7 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import exchange.app as app_mod
 
     importlib.reload(config_mod)
+    importlib.reload(compliance_log_mod)
     importlib.reload(ratelimit_mod)
     importlib.reload(observers_mod)
     importlib.reload(spending_guard_mod)

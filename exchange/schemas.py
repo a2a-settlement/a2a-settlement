@@ -634,6 +634,27 @@ class EscrowListResponse(BaseModel):
     total: int
 
 
+class MerkleProofItem(BaseModel):
+    sibling_hash: str
+    side: Literal["left", "right"]
+
+
+class EscrowAttestationItem(BaseModel):
+    leaf_index: int
+    data_hash: str
+    created_at: str
+    merkle_root: str
+    proof: list[MerkleProofItem]
+    schema_id: str
+    payload: dict
+
+
+class EscrowAttestationsResponse(BaseModel):
+    enabled: bool
+    escrow_id: str
+    attestations: list[EscrowAttestationItem]
+
+
 class BatchEscrowItem(BaseModel):
     provider_id: str
     amount: int

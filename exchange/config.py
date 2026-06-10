@@ -180,6 +180,7 @@ class Settings:
 
     # Compliance audit (Merkle tree)
     compliance_enabled: bool = _get_bool("A2A_EXCHANGE_COMPLIANCE_ENABLED", False)
+    compliance_db_path: str = os.getenv("A2A_EXCHANGE_COMPLIANCE_DB_PATH", "compliance_merkle.db")
 
     # Anti-self-dealing: diversity sweep
     diversity_sweep_interval_seconds: int = _get_int(

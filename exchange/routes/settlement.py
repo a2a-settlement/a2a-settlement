@@ -26,6 +26,7 @@ from exchange.schemas import (
     DepositResponse,
     DisputeRequest,
     DisputeResponse,
+    EscrowAttestationsResponse,
     EscrowDetailResponse,
     EscrowListResponse,
     EscrowRequest,
@@ -51,7 +52,7 @@ from exchange.schemas import (
     TransactionsResponse,
     VIAttestation,
 )
-from exchange.compliance_log import log_settlement_event
+from exchange.compliance_log import get_escrow_attestations, log_settlement_event
 from exchange.reputation_metrics import EMA_LAMBDA, compute_reputation_metrics
 from exchange.principal_resolver import classify_transaction
 from exchange.spending_guard import SpendingLimitGuard
@@ -673,7 +674,12 @@ def instant_settle(
         requester_id=current["id"],
         provider_id=req.provider_id,
         amount=req.amount,
+        fee_amount=fee_amount,
         status="settled",
+        task_id=req.task_id,
+        task_type=req.task_type,
+        self_dealing_class=instant_sdc,
+        attestation_kind="release",
     )
 
     return InstantSettleResponse(
@@ -839,7 +845,11 @@ def create_escrow(
         requester_id=current["id"],
         provider_id=req.provider_id,
         amount=req.amount,
+        fee_amount=fee_amount,
         status="held",
+        task_id=req.task_id,
+        task_type=req.task_type,
+        self_dealing_class=escrow_sdc,
     )
 
     return EscrowResponse(
@@ -927,7 +937,11 @@ def deliver(
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
         amount=int(escrow.amount),
+        fee_amount=int(escrow.fee_amount),
         status=escrow.status,
+        task_id=escrow.task_id,
+        task_type=escrow.task_type,
+        self_dealing_class=escrow.self_dealing_class,
         grounding_chain=grounding_chain,
     )
 
@@ -1064,7 +1078,13 @@ def partial_release(
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
         amount=release_amount,
+        fee_amount=release_fee,
         status=escrow.status,
+        task_id=escrow.task_id,
+        task_type=escrow.task_type,
+        self_dealing_class=escrow.self_dealing_class,
+        attestation_kind="release",
+        release_kind="partial",
     )
 
     return PartialReleaseResponse(
@@ -1211,7 +1231,13 @@ def release(
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
         amount=pay_amount,
+        fee_amount=pay_fee,
         status="released",
+        task_id=escrow.task_id,
+        task_type=escrow.task_type,
+        self_dealing_class=escrow.self_dealing_class,
+        attestation_kind="release",
+        release_kind="holdback" if is_holdback else "full",
     )
 
     return ReleaseResponse(
@@ -1317,7 +1343,14 @@ def refund(
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
         amount=refund_total,
+        fee_amount=int(escrow.holdback_fee or 0) if is_holdback else int(escrow.fee_amount),
         status=escrow.status,
+        task_id=escrow.task_id,
+        task_type=escrow.task_type,
+        self_dealing_class=escrow.self_dealing_class,
+        attestation_kind="refund" if not is_holdback else "refund",
+        refund_kind="holdback" if is_holdback else "full",
+        refund_reason=req.reason,
     )
 
     return RefundResponse(
@@ -1410,8 +1443,12 @@ def dispute(
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
         amount=int(escrow.amount),
+        fee_amount=int(escrow.fee_amount),
         status="evidence_pending",
         dispute_reason=req.reason,
+        task_id=escrow.task_id,
+        task_type=escrow.task_type,
+        self_dealing_class=escrow.self_dealing_class,
     )
 
     return DisputeResponse(
@@ -1564,8 +1601,16 @@ def resolve(
         requester_id=escrow.requester_id,
         provider_id=escrow.provider_id,
         amount=int(escrow.amount),
+        fee_amount=int(escrow.fee_amount),
         status=escrow.status,
         resolution_strategy=req.strategy,
+        dispute_reason=escrow.dispute_reason,
+        task_id=escrow.task_id,
+        task_type=escrow.task_type,
+        self_dealing_class=escrow.self_dealing_class,
+        attestation_kind="dispute_resolution",
+        resolution=req.resolution,
+        stake_ruling=req.stake_ruling,
     )
 
     if req.resolution == "release":
@@ -1674,6 +1719,20 @@ def get_escrow(
         if escrow is None:
             raise HTTPException(status_code=404, detail="Escrow not found")
         return _escrow_detail(escrow)
+
+
+@router.get(
+    "/exchange/escrow/{escrow_id}/attestations",
+    response_model=EscrowAttestationsResponse,
+    tags=["Settlement"],
+)
+@limiter.limit(settings.rate_limit_public)
+def get_escrow_attestation_records(
+    request: Request,
+    escrow_id: str,
+) -> EscrowAttestationsResponse:
+    """Return Merkle-backed typed attestations for an escrow."""
+    return EscrowAttestationsResponse(**get_escrow_attestations(escrow_id))
 
 
 @router.get("/exchange/escrows", response_model=EscrowListResponse, tags=["Settlement"])
