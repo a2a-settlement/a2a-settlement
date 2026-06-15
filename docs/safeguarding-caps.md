@@ -1,12 +1,12 @@
 # Safeguarding Caps Appendix (draft)
 
-**Status:** first cut for co-author review — @chopmob-cloud (AlgoVoi), @msaleme  
+**Status:** first cut for review — @chopmob-cloud (AlgoVoi)  
 **Origin:** [a2aproject/A2A#1576](https://github.com/a2aproject/A2A/discussions/1576) — dispute-as-DoS thread  
 **Applies to:** A2A-SE v0.11.x; intended as a normative appendix once reviewed
 
 ## Problem
 
-Escrow-first settlement creates a liquidity-freeze attack surface. If any party can flag an escrow for mediation, a malicious or compromised agent can lock provider funds at scale: the per-attack cost is sub-dollar, the cumulative provider-side cost is unbounded. msaleme flagged this in #1576; AlgoVoi's Agent Trust Bench carries it as the `dispute_amplification` category.
+Escrow-first settlement creates a liquidity-freeze attack surface. If any party can flag an escrow for mediation, a malicious or compromised agent can lock provider funds at scale: the per-attack cost is sub-dollar, the cumulative provider-side cost is unbounded. This was raised in the [A2A#1576](https://github.com/a2aproject/A2A/discussions/1576) discussion; AlgoVoi's Agent Trust Bench carries it as the `dispute_amplification` category.
 
 Caps do not prevent the attack. They bound the blast radius per identity so the attack stops being economical. That is the whole design goal: a single bad actor should be able to freeze a known, small, pre-declared maximum — not "everything they can reach."
 
@@ -53,11 +53,11 @@ Caps are only as strong as the identity they bind to. A cap per API key is no ca
 - Where a human principal operates multiple agents, exposure aggregates across all of them (this is what AlgoVoi's "max-3 mandates per human" does).
 - Sybil pressure migrates to the identity layer by design. That is the correct place for it — settlement caps should not try to solve identity.
 
-Settlement-derived reputation (`GET /reputation/{agent_id}`) can inform tier promotion, but reputation MUST NOT raise caps on its own: msaleme's EMA-manipulation scenario (ring of sock-puppets builds score, cashes out on one large fraudulent task) is exactly a cap-raise attack. Tier promotion needs identity verification, not score thresholds.
+Settlement-derived reputation (`GET /reputation/{agent_id}`) can inform tier promotion, but reputation MUST NOT raise caps on its own: the EMA-manipulation scenario raised in #1576 (ring of sock-puppets builds score, cashes out on one large fraudulent task) is exactly a cap-raise attack. Tier promotion needs identity verification, not score thresholds.
 
 ## Dispute-side controls
 
-Caps bound exposure; these bound the dispute path itself. Both came out of msaleme's #1576 analysis:
+Caps bound exposure; these bound the dispute path itself. Both address concerns raised in #1576:
 
 ### Cost to dispute
 
@@ -111,7 +111,7 @@ These vector definitions are the natural follow-up contribution to the conforman
 - It does not substitute for EMR safeguarding authorization or MLR AML controls where an operator holds customer funds.
 - It does not solve identity. Caps inherit the strength of the identity layer beneath them.
 - It does not replace mediator integrity work. `mediator_grooming` and `synthetic_artifact_dispute` need mediator-side defenses; caps only bound what a compromised mediation path can cost.
-- It does not cover cascade-refund semantics in multi-agent pipelines (msaleme's fourth point in #1576). That interacts with caps — a cascade refund can momentarily spike an identity's active exposure — but it needs its own treatment.
+- It does not cover cascade-refund semantics in multi-agent pipelines (raised in #1576). That interacts with caps — a cascade refund can momentarily spike an identity's active exposure — but it needs its own treatment.
 
 ## Open questions for co-authors
 
