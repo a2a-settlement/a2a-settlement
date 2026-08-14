@@ -1,6 +1,6 @@
 # @a2a-settlement/sdk
 
-TypeScript/JavaScript SDK for the [A2A Settlement Extension (A2A-SE)](https://github.com/widrss/a2a-settlement).
+TypeScript/JavaScript SDK for the [A2A Settlement Extension (A2A-SE)](https://github.com/a2a-settlement/a2a-settlement).
 
 ## Install
 

@@ -5,7 +5,7 @@ The A2A-SE exchange is designed to be self-hosted. You can run a private instanc
 ## Quick start with Docker Compose
 
 ```bash
-git clone https://github.com/widrss/a2a-settlement
+git clone https://github.com/a2a-settlement/a2a-settlement
 cd a2a-settlement
 docker compose up -d
 ```
