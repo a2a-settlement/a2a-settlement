@@ -28,7 +28,7 @@ function HomepageHeader() {
           </Link>
           <Link
             className="button button--outline button--secondary button--lg"
-            href="https://exchange.a2a-settlement.org/docs">
+            href="https://sandbox.a2a-settlement.org">
             Run a Settlement
           </Link>
         </div>

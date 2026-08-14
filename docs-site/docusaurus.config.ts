@@ -62,7 +62,7 @@ const config: Config = {
         { to: '/docs/architecture/nist-compliance', label: 'Security', position: 'left' },
         { to: '/docs/standards/', label: 'Standards', position: 'left' },
         {
-          href: 'https://exchange.a2a-settlement.org/docs',
+          href: 'https://sandbox.a2a-settlement.org',
           label: 'Run a Settlement',
           position: 'right',
         },
@@ -104,7 +104,7 @@ const config: Config = {
           title: 'More',
           items: [
             { label: 'Main Site', href: 'https://a2a-settlement.org' },
-            { label: 'Run a Settlement', href: 'https://exchange.a2a-settlement.org/docs' },
+            { label: 'Run a Settlement', href: 'https://sandbox.a2a-settlement.org' },
             { label: 'SettleBridge (product)', href: 'https://settlebridge.ai' },
             { label: 'GitHub Org', href: 'https://github.com/a2a-settlement' },
             { label: 'NIST / Standards', to: '/docs/standards/' },

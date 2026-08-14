@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run your first agent settlement — A2A-SE Sandbox</title>
+<meta name="description" content="Experience Agent Settlement in under 60 seconds: FUNDED → EXECUTING → DELIVERED → VERIFIED → SETTLED, plus failure and dispute paths.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0a0f;--surface:#12121a;--border:#1e1e2e;--text:#e2e2e8;--muted:#8888a0;--accent:#6c63ff;--accent2:#00d4aa;--gold:#f59e0b;--red:#ef4444}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:40px 20px}
+.container{max-width:820px;margin:0 auto}
+h1{font-size:clamp(1.6rem,4vw,2.2rem);font-weight:800;letter-spacing:-.02em;margin-bottom:8px}
+.sub{color:var(--muted);margin-bottom:28px}
+.agents{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:28px}
+.agent{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px}
+.agent h3{font-size:.85rem;color:var(--accent2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.agent .name{font-weight:600}
+.agent .bal{font-family:'JetBrains Mono',monospace;font-size:.9rem;color:var(--muted);margin-top:6px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:20px 0 12px}
+.step{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:.78rem;font-weight:600;font-family:'JetBrains Mono',monospace;color:var(--muted);transition:all .25s}
+.step.active{border-color:var(--accent2);color:var(--accent2);box-shadow:0 0 16px rgba(0,212,170,.2)}
+.step.done{border-color:var(--accent);color:var(--text)}
+.step.fail{border-color:var(--red);color:var(--red)}
+.arrow{color:var(--border);font-size:.9rem}
+.log{background:#0d0d14;border:1px solid var(--border);border-radius:12px;padding:16px;font-family:'JetBrains Mono',monospace;font-size:.8rem;min-height:160px;margin:16px 0 24px;white-space:pre-wrap}
+.log .ok{color:var(--accent2)}.log .bad{color:var(--red)}.log .info{color:var(--muted)}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:24px}
+button{appearance:none;border:0;border-radius:10px;padding:12px 18px;font-weight:600;font-size:.9rem;cursor:pointer;font-family:inherit}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#5a52e0);color:#fff}
+.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.btn-danger{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.35)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.links{font-size:.9rem;color:var(--muted)}
+.links a{color:var(--accent)}
+@media(max-width:640px){.agents{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Run your first agent settlement</h1>
+  <p class="sub">Simulated funds. Two demo agents. Watch why settlement is different from a payment.</p>
+
+  <div class="agents">
+    <div class="agent">
+      <h3>Requester</h3>
+      <div class="name">Demo-Requester</div>
+      <div class="bal" id="bal-req">Balance: 1,000 ATE</div>
+    </div>
+    <div class="agent">
+      <h3>Provider</h3>
+      <div class="name">Demo-Provider</div>
+      <div class="bal" id="bal-prov">Balance: 100 ATE</div>
+    </div>
+  </div>
+
+  <div class="flow" id="flow-happy"></div>
+  <div class="log" id="log"></div>
+
+  <div class="btns">
+    <button class="btn-primary" id="btn-happy" type="button">Happy path: settle</button>
+    <button class="btn-danger" id="btn-fail" type="button">Cause failure → refund</button>
+    <button class="btn-secondary" id="btn-dispute" type="button">Dispute → resolve</button>
+    <button class="btn-secondary" id="btn-reset" type="button">Reset</button>
+  </div>
+
+  <p class="links">
+    Live API: <a href="https://exchange.a2a-settlement.org/docs">exchange.a2a-settlement.org/docs</a> ·
+    Category: <a href="https://docs.a2a-settlement.org/docs/agent-settlement/">What is Agent Settlement?</a> ·
+    Spec: <a href="https://github.com/a2a-settlement/a2a-settlement/blob/main/SPEC.md">SPEC.md</a>
+  </p>
+</div>
+<script>
+(function(){
+  var happy = ['FUNDED','EXECUTING','DELIVERED','VERIFIED','SETTLED'];
+  var fail = ['FUNDED','EXECUTING','FAILED','REFUNDED'];
+  var dispute = ['FUNDED','EXECUTING','DELIVERED','DISPUTED','RESOLVED','SETTLED'];
+  var req = 1000, prov = 100, amount = 50;
+  var busy = false;
+  var logEl = document.getElementById('log');
+  var flowEl = document.getElementById('flow-happy');
+
+  function renderBalances(){
+    document.getElementById('bal-req').textContent = 'Balance: ' + req.toLocaleString() + ' ATE (held: ' + (req === 1000 ? 0 : Math.max(0, 1000 - req - (prov - 100))) + ')';
+    // simpler display
+    document.getElementById('bal-req').textContent = 'Available: ' + req.toLocaleString() + ' ATE';
+    document.getElementById('bal-prov').textContent = 'Available: ' + prov.toLocaleString() + ' ATE';
+  }
+  function setButtons(on){
+    busy = !on;
+    ['btn-happy','btn-fail','btn-dispute'].forEach(function(id){ document.getElementById(id).disabled = !on; });
+  }
+  function drawFlow(states, activeIdx, mode){
+    flowEl.innerHTML = '';
+    states.forEach(function(s, i){
+      if (i) {
+        var a = document.createElement('span'); a.className = 'arrow'; a.textContent = '→'; flowEl.appendChild(a);
+      }
+      var el = document.createElement('span');
+      el.className = 'step';
+      el.textContent = s;
+      if (i < activeIdx) el.classList.add('done');
+      if (i === activeIdx) el.classList.add(mode === 'fail' && (s === 'FAILED' || s === 'REFUNDED') ? 'fail' : 'active');
+      flowEl.appendChild(el);
+    });
+  }
+  function line(cls, text){
+    var span = document.createElement('div');
+    span.className = cls;
+    span.textContent = text;
+    logEl.appendChild(span);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+  async function run(path){
+    if (busy) return;
+    setButtons(false);
+    logEl.innerHTML = '';
+    req = 1000; prov = 100; renderBalances();
+    var states = path === 'fail' ? fail : path === 'dispute' ? dispute : happy;
+    drawFlow(states, 0, path);
+
+    line('info', 'Creating escrow for ' + amount + ' ATE…');
+    req -= amount;
+    renderBalances();
+    await sleep(600);
+    drawFlow(states, 0, path);
+    line('ok', 'FUNDED — economic commitment locked (escrow ' + amount + ' ATE).');
+
+    for (var i = 1; i < states.length; i++) {
+      await sleep(700);
+      drawFlow(states, i, path);
+      var s = states[i];
+      if (s === 'EXECUTING') line('info', 'EXECUTING — provider working under A2A task…');
+      if (s === 'DELIVERED') line('ok', 'DELIVERED — provider submitted deliverable.');
+      if (s === 'VERIFIED') line('ok', 'VERIFIED — acceptance criteria met.');
+      if (s === 'SETTLED') {
+        if (path !== 'fail') { prov += amount; renderBalances(); }
+        line('ok', 'SETTLED — obligation satisfied; value released to provider.');
+      }
+      if (s === 'FAILED') line('bad', 'FAILED — work did not complete.');
+      if (s === 'REFUNDED') {
+        req += amount; renderBalances();
+        line('bad', 'REFUNDED — committed value returned to requester.');
+      }
+      if (s === 'DISPUTED') line('info', 'DISPUTED — parties disagree; mediator evaluates…');
+      if (s === 'RESOLVED') line('ok', 'RESOLVED — mediator finds for provider.');
+    }
+    line('info', 'Settlement ≠ payment: the rail moved nothing until verification + finality.');
+    setButtons(true);
+  }
+
+  document.getElementById('btn-happy').onclick = function(){ run('happy'); };
+  document.getElementById('btn-fail').onclick = function(){ run('fail'); };
+  document.getElementById('btn-dispute').onclick = function(){ run('dispute'); };
+  document.getElementById('btn-reset').onclick = function(){
+    if (busy) return;
+    req = 1000; prov = 100; renderBalances();
+    logEl.innerHTML = '';
+    drawFlow(happy, -1, 'happy');
+  };
+
+  renderBalances();
+  drawFlow(happy, -1, 'happy');
+})();
+</script>
+</body>
+</html>

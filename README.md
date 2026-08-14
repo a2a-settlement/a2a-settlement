@@ -45,7 +45,9 @@ RequesterAgent  <---- A2A ---->  ProviderAgent
 | **Docs / category definition** | [What is Agent Settlement?](https://docs.a2a-settlement.org/docs/agent-settlement/) |
 | **DOI / archival** | pending Zenodo deposit |
 
-## Run a settlement (reference exchange)
+## Run a settlement
+
+Interactive demo (state machine): **https://sandbox.a2a-settlement.org**
 
 Live OpenAPI UI: **https://exchange.a2a-settlement.org/docs**
 
@@ -62,8 +64,6 @@ Local exchange:
 python exchange/app.py &
 python examples/quickstart.py
 ```
-
-Sandbox hostname (`sandbox.a2a-settlement.org`) is provisioned on the same droplet for interactive demos; until the state-machine UI is ready, use the exchange docs URL above.
 
 ## SDKs & integrations
 
