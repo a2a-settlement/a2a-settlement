@@ -67,4 +67,4 @@ They are complementary. See [x402 vs AP2 vs A2A-SE](/docs/architecture/protocol-
 
 Without a settlement layer, agent economies cannot prove that work was done before value finalized, cannot refund failure cleanly, and cannot build portable reputation. Settlement turns “agents paid each other” into an auditable economic outcome.
 
-Next: [Big Picture: Agent Transaction Lifecycle](/docs/big-picture/) · [Run a Settlement](https://exchange.a2a-settlement.org/docs) · [Standards & Provenance](/docs/standards/)
+Next: [Big Picture: Agent Transaction Lifecycle](/docs/big-picture/) · [Run a Settlement](https://sandbox.a2a-settlement.org/) · [Standards & Provenance](/docs/standards/)
