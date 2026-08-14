@@ -6,12 +6,12 @@ info:
     REST API for the A2A Settlement Extension (A2A-SE) exchange service.
     Provides escrow-based settlement for the Agent2Agent protocol.
 
-    See [SPEC.md](https://github.com/widrss/a2a-settlement/blob/main/SPEC.md) for the full specification.
+    See [SPEC.md](https://github.com/a2a-settlement/a2a-settlement/blob/main/SPEC.md) for the full specification.
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
   contact:
-    url: https://github.com/widrss/a2a-settlement
+    url: https://github.com/a2a-settlement/a2a-settlement
 
 servers:
   - url: https://exchange.a2a-settlement.org/v1

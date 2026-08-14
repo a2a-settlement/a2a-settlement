@@ -2,10 +2,12 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
-[![Spec: v0.8.1](https://img.shields.io/badge/spec-v0.8.1-green.svg)](SPEC.md)
+[![Spec: v0.11.0](https://img.shields.io/badge/spec-v0.11.0-green.svg)](SPEC.md)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-green.svg)](sdk-ts/)
 
-**A2A-SE adds escrow-based payment to the A2A protocol in under 100 lines of integration code.** When two agents discover each other through A2A and one performs work for the other, A2A-SE holds funds in escrow during task execution and releases them on completion -- or refunds them on failure. Zero modifications to A2A core. Currency-agnostic. The exchange is an interface, not a service: agents can point to any conforming implementation (hosted, self-hosted, or on-chain).
+**A2A-SE defines settlement semantics for A2A tasks.** It is an open standard for the **settlement layer** of autonomous agent commerce: economic commitment, delivery, verification, release/refund, disputes, reputation, and finality. Escrow is one mechanism that implements commitment; settlement is the abstraction. Zero modifications to A2A core. Currency-agnostic. The exchange is an **interface**, not a single hosted service.
+
+> Spec first published **February 17, 2026** — initial commit [`c5ba9aaa`](https://github.com/a2a-settlement/a2a-settlement/commit/c5ba9aaa8bfca489d1f95cd78a695b98988dacc2).
 
 ```
 RequesterAgent  <---- A2A ---->  ProviderAgent
@@ -15,41 +17,70 @@ RequesterAgent  <---- A2A ---->  ProviderAgent
           escrow / release / refund
 ```
 
-## Try the hosted sandbox (zero install)
+## Scope
 
-Test agent payments without running any infrastructure. The public sandbox at **https://sandbox.a2a-settlement.org** gives you starter credits on registration.
+| Layer | A2A-SE |
+|-------|--------|
+| Communication (A2A) | No — uses A2A as-is |
+| Identity | Integrates |
+| Spending authorization | Integrates (AP2 / OAuth scopes) |
+| Payment rail | No |
+| **Settlement** | **Yes** |
+
+### Non-Goals
+
+- Providing the underlying payment rail (USDC, bank wires, x402, …)
+- Being the system of record for agent identity
+- Requiring federation to use Core settlement semantics
+- Replacing A2A messaging
+
+## Normative links
+
+| Resource | Link |
+|----------|------|
+| **Specification** | [SPEC.md](SPEC.md) (v0.11.0) |
+| **Conformance** | [settlement-conformance](https://github.com/a2a-settlement/settlement-conformance) |
+| **Federation** (optional) | [a2a-federation-rfc](https://github.com/a2a-settlement/a2a-federation-rfc) |
+| **Reference implementation** | this repo (`exchange/`) |
+| **Docs / category definition** | [What is Agent Settlement?](https://docs.a2a-settlement.org/docs/agent-settlement/) |
+| **DOI / archival** | pending Zenodo deposit |
+
+## Run a settlement (reference exchange)
+
+Live OpenAPI UI: **https://exchange.a2a-settlement.org/docs**
 
 ```bash
 git clone https://github.com/a2a-settlement/a2a-settlement
 cd a2a-settlement
 pip install -e ./sdk
-A2A_EXCHANGE_URL=https://sandbox.a2a-settlement.org python examples/quickstart.py
+A2A_EXCHANGE_URL=https://exchange.a2a-settlement.org python examples/quickstart.py
 ```
 
-You should see an escrow created and released, and balances updated. Registration is open; no API key needed beforehand — the quickstart registers two demo accounts and runs a full escrow cycle.
-
-## Get started in 60 seconds (local exchange)
-
-To run the exchange locally instead:
+Local exchange:
 
 ```bash
-git clone https://github.com/a2a-settlement/a2a-settlement
-cd a2a-settlement
-pip install -e ./sdk
 python exchange/app.py &
 python examples/quickstart.py
 ```
 
-You should see an escrow created and released, and balances updated.
+Sandbox hostname (`sandbox.a2a-settlement.org`) is provisioned on the same droplet for interactive demos; until the state-machine UI is ready, use the exchange docs URL above.
 
-## SDKs
+## SDKs & integrations
 
 | Language | Package | Install |
 |----------|---------|---------|
 | Python | `a2a-settlement` | `pip install -e ./sdk` |
 | TypeScript/JS | `@a2a-settlement/sdk` | `cd sdk-ts && npm install` |
 
-Both SDKs mirror the same method signatures. See [sdk/](sdk/) and [sdk-ts/](sdk-ts/) for docs.
+Framework integrations (move higher intentionally — infrastructure is only as valuable as what plugs into it):
+
+| Project | Framework |
+|---------|-----------|
+| [adk-a2a-settlement](https://github.com/a2a-settlement/adk-a2a-settlement) | Google ADK |
+| [langgraph-a2a-settlement](https://github.com/a2a-settlement/langgraph-a2a-settlement) | LangGraph |
+| [crewai-a2a-settlement](https://github.com/a2a-settlement/crewai-a2a-settlement) | CrewAI |
+| [litellm-a2a-settlement](https://github.com/a2a-settlement/litellm-a2a-settlement) | LiteLLM |
+| [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) | MCP |
 
 ## Deploy your own exchange
 
@@ -60,116 +91,51 @@ docker compose up -d
 curl http://localhost:3000/health
 ```
 
-**Fly.io**:
+See [docs/self-hosting.md](docs/self-hosting.md) for Fly.io, Railway, and environment variables.
 
-```bash
-fly launch --copy-config
-fly postgres create --name a2a-exchange-db
-fly postgres attach a2a-exchange-db
-fly deploy
-```
-
-**Railway**: Fork the repo, connect Railway, add the PostgreSQL plugin, deploy.
-
-See [docs/self-hosting.md](docs/self-hosting.md) for full environment variable reference.
-
-**Optional integrations:** Add [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) middleware for OAuth-based economic authorization and the Secret Vault. Run the Security Shim (`shim/`) for escrow-gated external tool access with credential injection (the [Economic Air Gap](docs/economic-air-gap.md)). Run [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) as a sidecar for AI-powered dispute resolution. Use [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard) for human oversight. Train agents against live bounties using the [Self-Improving Agent Loop](docs/self-improving-agents.md) before deploying to production.
+**Optional:** [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth), Security Shim (`shim/`), [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator), [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard), [Self-Improving Agent Loop](docs/self-improving-agents.md).
 
 ## Repo structure
 
-- `SPEC.md` -- the extension specification (v0.8.1)
-- `openapi.yaml` -- OpenAPI 3.1 spec for the exchange API
-- `exchange/` -- FastAPI + SQLAlchemy settlement exchange (SQLite dev, Postgres prod)
-- `shim/` -- Security Shim forward proxy (Economic Air Gap -- escrow-gated tool access with credential injection)
-- `sdk/` -- pip-installable Python SDK
-- `sdk-ts/` -- npm-installable TypeScript/JavaScript SDK
-- `examples/` -- runnable demos (including air gap three-act demo)
-- `docs/` -- architecture, integration guide, economic air gap, pricing models, self-hosting, self-improving agents
-- `Dockerfile` + `docker-compose.yml` -- containerized deployment
-- `fly.toml` + `railway.json` -- one-click cloud deploy configs
+- `SPEC.md` — extension specification (**v0.11.0**)
+- `openapi.yaml` — OpenAPI 3.1 exchange API
+- `docs-site/` — Docusaurus docs (docs.a2a-settlement.org)
+- `site/` — marketing homepage (a2a-settlement.org)
+- `exchange/` — reference FastAPI exchange
+- `shim/` — Security Shim (Economic Air Gap)
+- `sdk/` / `sdk-ts/` — Python and TypeScript SDKs
+- `examples/` — runnable demos
 
 ## How A2A-SE compares to AP2 and x402
 
-These three protocols address different layers of the agent payment stack. They are complementary, not competing.
+| Layer | Protocol | Question |
+|-------|----------|----------|
+| Payments / access | **x402** | Can I talk to / pay for this call? |
+| Authorization | **AP2** | May this agent spend? |
+| **Settlement** | **A2A-SE** | Was the obligation satisfied? |
 
-- **x402** is an access gate: pay-per-call micropayments to talk to an agent. Think of it as a toll booth.
-- **AP2** (Agent Payments Protocol) handles payment negotiation: "how will we pay?" It defines flows for agents to agree on payment methods and amounts.
-- **A2A-SE** handles task escrow: "hold these funds while I work, then release them." It provides escrow, multi-step settlement, dispute resolution, and reputation tracking.
-
-| Concern | AP2 | x402 | A2A-SE |
-|---------|-----|------|--------|
-| Payment negotiation | Yes | -- | Lightweight |
-| Access gating | -- | Yes | -- |
-| Task escrow | -- | -- | Yes |
-| Dispute resolution | -- | -- | Yes |
-| Reputation | -- | -- | Yes |
-| Multi-turn tasks | -- | -- | Yes |
-
-An agent can use all three: x402 gates discovery, AP2 negotiates terms, A2A-SE escrows the payment.
-
-## Security: The Zero-Trust Bridge
-
-The a2a-settlement bridge serves as the authoritative security layer between autonomous agents (LangGraph, CrewAI, LiteLLM) and sensitive infrastructure. It mitigates **Agent-on-Agent (A2A) attacks**—such as the hackerbot-claw exploit—by replacing static API permissions with dynamic, reputation-gated execution.
-
-### Core Security Primitives
-
-| Primitive | Description |
-|-----------|-------------|
-| **Reputation-Gated Execution (EMA)** | Every agent action is filtered through an Exponential Moving Average trust score. High-risk tools (Shell, PR Merge, Cloud Console) require a minimum $Rep_{EMA}$ threshold. A single logic dispute triggers an immediate reputation decay, isolating the agent before escalation. |
-| **Ephemeral AgentCards** | Replaces persistent environment variables with task-specific, cryptographically signed identities. These cards define a strict "Intent Scope"—any command execution outside this scope (e.g., unauthorized `curl` to metadata services) results in immediate credential revocation. |
-| **Security-Weighted CBS** | The Composite Bid Score (CBS) forces a trade-off between performance and security. For mission-critical tasks, the bridge prioritizes agents with high Verifiable Logic Proofs ($w_2$) over raw speed or cost. |
-| **Logic Verifiability Layer** | Before an action is committed to the bridge, the agent must submit a "pre-flight" logic proof. The settlement layer validates this against defined safety policies, preventing "hallucinated" or malicious privilege escalations. |
-
-### Defensive Mapping: a2a-settlement vs. hackerbot-claw
-
-| Threat Vector | a2a-settlement Mitigation |
-|---------------|---------------------------|
-| Privilege Escalation | EMA Thresholding prevents unvetted agents from accessing sudo/shell. |
-| Identity Hijacking | AgentCards ensure only the specific "Identified Agent" can execute the signed task. |
-| Payload Injection | Logic Proofs require the agent to declare intent before writing to a repo/pipeline. |
-| Lateral Movement | Settlement Isolation freezes an agent's status across the entire network upon a single dispute. |
-
-## API documentation
-
-When the exchange is running (locally or sandbox), visit:
-- **Sandbox Swagger UI**: https://sandbox.a2a-settlement.org/docs
-- **Sandbox ReDoc**: https://sandbox.a2a-settlement.org/redoc
-- **Local**: http://localhost:3000/docs and http://localhost:3000/redoc
-
-Or see `openapi.yaml` in the repo root for the normative spec.
-
-## Development
-
-```bash
-pip install -e ".[exchange,examples,dev]"
-pytest -q
-```
+They are complementary. Full write-up: [docs.a2a-settlement.org](https://docs.a2a-settlement.org/docs/architecture/protocol-comparison).
 
 ## Ecosystem
 
-### Core Infrastructure
+### Standard & conformance
 
 | Project | Description |
 |---------|-------------|
-| [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) | OAuth 2.0 settlement scopes — spending limits, counterparty policies, delegation chains |
-| [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) | AI-powered dispute resolution — auto-resolves clear cases, escalates ambiguous ones |
-| [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard) | Human oversight dashboard — monitor spending, audit transactions, revoke authority |
-| [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) | MCP server — settlement tools for Claude, Cursor, LangGraph, or any MCP client |
-| [settlebridge-ai](https://github.com/a2a-settlement/settlebridge-ai) | SettleBridge Gateway — trust/policy enforcement + bounty marketplace |
-| [mcp-trust-gateway](https://github.com/a2a-settlement/mcp-trust-gateway) | MCP Trust Gateway — trust, reputation, and economic accountability above OAuth |
-| [otel-agent-provenance](https://github.com/a2a-settlement/otel-agent-provenance) | OpenTelemetry semantic conventions for agent provenance and derivation lineage |
-| [a2a-federation-rfc](https://github.com/a2a-settlement/a2a-federation-rfc) | Federation protocol — interoperable reputation and settlement across exchanges |
+| [settlement-conformance](https://github.com/a2a-settlement/settlement-conformance) | Neutral conformance suite — prove settlement-capable without our exchange |
+| [a2a-federation-rfc](https://github.com/a2a-settlement/a2a-federation-rfc) | Optional federation across independent exchanges |
 
-### Framework Integrations
+### Reference infrastructure
 
-| Project | Framework | Pattern |
-|---------|-----------|---------|
-| [langgraph-a2a-settlement](https://github.com/a2a-settlement/langgraph-a2a-settlement) | LangGraph | Escrow-gated graph nodes, `create_settlement_graph` |
-| [crewai-a2a-settlement](https://github.com/a2a-settlement/crewai-a2a-settlement) | CrewAI | `SettledCrew` / `SettledTask` wrappers |
-| [litellm-a2a-settlement](https://github.com/a2a-settlement/litellm-a2a-settlement) | LiteLLM | Callback hooks for escrow on A2A agent calls |
-| [adk-a2a-settlement](https://github.com/a2a-settlement/adk-a2a-settlement) | Google ADK | `to_settled_a2a`, `SettledRemoteAgent`, settlement tools |
-
-**Environment variables:** Most integrations use `A2A_EXCHANGE_URL` (e.g. `http://localhost:3000`) and `A2A_API_KEY`. ADK and CrewAI use `A2ASE_EXCHANGE_URL` / `A2ASE_API_KEY`. The exchange API lives under `/v1`; the SDK appends this automatically.
+| Project | Description |
+|---------|-------------|
+| [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth) | OAuth 2.0 settlement scopes |
+| [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator) | AI-powered dispute resolution |
+| [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard) | Human oversight dashboard |
+| [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) | MCP settlement tools |
+| [settlebridge-ai](https://github.com/a2a-settlement/settlebridge-ai) | SettleBridge Gateway (product) |
+| [mcp-trust-gateway](https://github.com/a2a-settlement/mcp-trust-gateway) | MCP trust evaluation |
+| [otel-agent-provenance](https://github.com/a2a-settlement/otel-agent-provenance) | OTel provenance conventions |
 
 ## License
 

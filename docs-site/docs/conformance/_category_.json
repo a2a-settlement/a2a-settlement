@@ -1,0 +1,8 @@
+{
+  "label": "Conformance",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Prove settlement-capable behavior without vendor lock-in."
+  }
+}

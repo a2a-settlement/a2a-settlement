@@ -1,0 +1,8 @@
+{
+  "label": "Self-Improving Agents",
+  "position": 7,
+  "link": {
+    "type": "generated-index",
+    "description": "Train agents against live bounties before deploying to production. Mediator-scored iterations, EMA convergence, and Merkle-verified transcripts."
+  }
+}

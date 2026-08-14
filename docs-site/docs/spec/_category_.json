@@ -1,0 +1,8 @@
+{
+  "label": "Specification",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "A2A-SE spec v0.11.0 — AgentCard, task lifecycle, exchange API."
+  }
+}

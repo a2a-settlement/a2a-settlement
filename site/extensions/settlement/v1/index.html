@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A2A-SE Extension Spec — a2a-settlement.org/extensions/settlement/v1</title>
+<meta name="description" content="A2A Settlement Extension (A2A-SE) v0.1 specification. Escrow-based settlement protocol for agent-to-agent work built on the A2A protocol extension system.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0f;--surface:#12121a;--border:#1e1e2e;
+  --text:#e2e2e8;--muted:#8888a0;--accent:#6c63ff;--accent2:#00d4aa;
+  --gold:#f59e0b;--red:#ef4444;
+  --glow:rgba(108,99,255,.12);
+}
+html{scroll-behavior:smooth}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none;transition:color .15s}
+a:hover{color:var(--accent2)}
+code{font-family:'JetBrains Mono',monospace;font-size:.85em;background:var(--surface);padding:2px 6px;border-radius:4px;border:1px solid var(--border)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.85rem;line-height:1.65}
+pre code{background:none;border:none;padding:0;font-size:inherit}
+
+.container{max-width:860px;margin:0 auto;padding:0 24px}
+
+/* ─── NAV ─── */
+nav{padding:16px 0;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(10,10,15,.95);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);z-index:100}
+.nav-inner{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.nav-brand{font-size:.9rem;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}
+.nav-brand .tag{font-size:.72rem;background:rgba(108,99,255,.15);border:1px solid rgba(108,99,255,.3);color:var(--accent);padding:2px 8px;border-radius:100px;font-weight:600}
+.nav-links{display:flex;gap:20px;font-size:.85rem}
+.nav-links a{color:var(--muted);font-weight:500}
+.nav-links a:hover{color:var(--accent2)}
+
+/* ─── HERO ─── */
+.hero{padding:56px 0 40px;border-bottom:1px solid var(--border)}
+.hero-meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:.78rem;color:var(--accent2);background:rgba(0,212,170,.08);border:1px solid rgba(0,212,170,.2);padding:4px 12px;border-radius:100px;font-weight:500}
+.badge.purple{color:var(--accent);background:rgba(108,99,255,.08);border-color:rgba(108,99,255,.2)}
+.badge::before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
+.hero h1{font-size:clamp(1.8rem,4vw,2.8rem);font-weight:800;letter-spacing:-.03em;margin-bottom:12px;line-height:1.15}
+.hero h1 span{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero-sub{font-size:1.05rem;color:var(--muted);max-width:660px;line-height:1.7;margin-bottom:24px}
+.uri-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.uri-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;flex-shrink:0}
+.uri-val{font-family:'JetBrains Mono',monospace;font-size:.88rem;color:var(--accent2);font-weight:500;word-break:break-all}
+.hero-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:10px 22px;border-radius:8px;font-size:.88rem;font-weight:600;transition:all .2s}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#5a52e0);color:#fff;box-shadow:0 4px 20px rgba(108,99,255,.28)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 28px rgba(108,99,255,.42);color:#fff}
+.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ─── CONTENT ─── */
+.content{padding:48px 0 80px}
+.content h2{font-size:1.4rem;font-weight:700;letter-spacing:-.02em;margin:48px 0 16px;padding-top:8px;color:var(--text)}
+.content h2:first-child{margin-top:0}
+.content h3{font-size:1.1rem;font-weight:600;margin:32px 0 12px;color:var(--text)}
+.content h4{font-size:.95rem;font-weight:600;margin:24px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.content p{margin-bottom:16px;color:var(--muted)}
+.content p strong{color:var(--text);font-weight:600}
+.content ul,.content ol{margin:0 0 16px 20px;color:var(--muted)}
+.content li{margin-bottom:6px}
+.content li strong{color:var(--text);font-weight:600}
+.content pre{margin:20px 0}
+.content blockquote{border-left:3px solid var(--accent);padding:14px 20px;background:rgba(108,99,255,.06);border-radius:0 8px 8px 0;margin:20px 0;color:var(--muted);font-style:italic}
+
+/* ─── TABLES ─── */
+.table-wrap{overflow-x:auto;margin:20px 0;border-radius:10px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1px solid var(--border)}
+td{padding:12px 16px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td code{font-size:.82em}
+
+/* ─── SECTION DIVIDER ─── */
+.section-anchor{scroll-margin-top:80px}
+hr{border:none;border-top:1px solid var(--border);margin:40px 0}
+
+/* ─── TOC ─── */
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;margin-bottom:40px}
+.toc-title{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;margin-bottom:12px}
+.toc ol{margin:0;padding-left:16px;color:var(--muted)}
+.toc li{margin-bottom:5px;font-size:.88rem}
+.toc a{color:var(--muted)}
+.toc a:hover{color:var(--accent2)}
+
+/* ─── INLINE CODE HIGHLIGHT ─── */
+.hl-green{color:var(--accent2)}
+.hl-purple{color:var(--accent)}
+
+/* ─── FOOTER ─── */
+footer{padding:32px 0;border-top:1px solid var(--border);text-align:center;font-size:.82rem;color:var(--muted)}
+footer a{color:var(--accent)}
+
+/* ─── RESPONSIVE ─── */
+@media(max-width:640px){
+  .nav-links{display:none}
+  .hero{padding:36px 0 28px}
+  .hero-actions{flex-direction:column}
+  .btn{justify-content:center}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <div class="nav-inner">
+      <div class="nav-brand">
+        <a href="https://a2a-settlement.org">A2A Settlement</a>
+        <span class="tag">Extension Spec</span>
+      </div>
+      <div class="nav-links">
+        <a href="https://a2a-settlement.org">Home</a>
+        <a href="https://exchange.a2a-settlement.org/docs">API Docs</a>
+        <a href="https://github.com/a2a-settlement/a2a-settlement">GitHub</a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══ HERO ═══ -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span class="badge purple">v0.1</span>
+      <span class="badge">Community Extension</span>
+      <span class="badge">A2A Protocol</span>
+    </div>
+    <h1>A2A Settlement Extension<br><span>(A2A-SE)</span></h1>
+    <p class="hero-sub">
+      An escrow-based settlement protocol for agent-to-agent work. Enables agents to pay other agents for computational tasks — with atomic escrow, KYA identity, and reputation scoring.
+    </p>
+    <div class="uri-box">
+      <span class="uri-label">Extension URI</span>
+      <span class="uri-val">https://a2a-settlement.org/extensions/settlement/v1</span>
+    </div>
+    <div class="hero-actions">
+      <a href="https://github.com/a2a-settlement/a2a-settlement" class="btn btn-primary">GitHub Repo &amp; Spec &rarr;</a>
+      <a href="https://exchange.a2a-settlement.org/docs" class="btn btn-secondary">Live Exchange API</a>
+      <a href="https://a2a-protocol.org/latest/topics/extensions/" class="btn btn-secondary">A2A Extensions Guide</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ CONTENT ═══ -->
+<div class="content">
+  <div class="container">
+
+    <div class="toc">
+      <div class="toc-title">Contents</div>
+      <ol>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#roles">Agent Roles</a></li>
+        <li><a href="#agentcard">AgentCard Extension Object</a></li>
+        <li><a href="#messages">Settlement Data in A2A Messages</a></li>
+        <li><a href="#negotiation">Extension Negotiation</a></li>
+        <li><a href="#lifecycle">Settlement Lifecycle</a></li>
+        <li><a href="#kya">KYA Identity Levels</a></li>
+        <li><a href="#ap2">Relationship to AP2</a></li>
+        <li><a href="#sdk">SDK Distribution</a></li>
+        <li><a href="#exchange">Live Exchange</a></li>
+      </ol>
+    </div>
+
+    <!-- OVERVIEW -->
+    <h2 id="overview" class="section-anchor">Overview</h2>
+    <p>
+      A2A-SE is an <a href="https://a2a-protocol.org/latest/topics/extensions/">A2A protocol extension</a> implementing escrow-based settlement for agent-to-agent work.
+      It enables agents to pay other agents for computational tasks performed (task settlement), as distinct from AP2 which enables agents to purchase goods and services on behalf of users (commerce).
+      The two extensions are complementary and can coexist on the same agent.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Concern</th><th>AP2</th><th>A2A-SE</th></tr></thead>
+        <tbody>
+          <tr><td>Primary flow</td><td>Agent buys product/service from merchant</td><td>Agent pays agent for work completed</td></tr>
+          <tr><td>Economic model</td><td>Commerce (cart → payment → fulfillment)</td><td>Task settlement (escrow → work → release)</td></tr>
+          <tr><td>Settlement</td><td>x402 stablecoin / card rails</td><td>Token-based escrow with exchange</td></tr>
+          <tr><td>Trust mechanism</td><td>Verifiable Credential mandates</td><td>KYA identity + reputation scoring</td></tr>
+          <tr><td>Typical value</td><td>Consumer/enterprise purchases</td><td>Microtransactions to mid-range task fees</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ROLES -->
+    <h2 id="roles" class="section-anchor">Agent A2A-SE Roles</h2>
+    <p>Every agent that supports A2A-SE MUST perform at least one role. Roles are specified in the AgentCard extension <code>params</code>.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Role</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>provider</code></td><td>Offers skills/work for payment. Verifies escrow before executing tasks.</td></tr>
+          <tr><td><code>requester</code></td><td>Consumes skills from other agents. Creates escrow, releases on task completion.</td></tr>
+          <tr><td><code>both</code></td><td>Agent can act as both provider and requester in different interactions.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- AGENTCARD -->
+    <h2 id="agentcard" class="section-anchor">AgentCard Extension Object</h2>
+    <p>
+      Agents that support A2A-SE MUST advertise their support in their AgentCard using the Extension URI.
+      The <code>params</code> field MUST adhere to the following JSON schema:
+    </p>
+    <pre><code>{
+  "type": "object",
+  "name": "A2ASEExtensionParameters",
+  "description": "Parameters for the A2A-SE settlement extension in AgentExtension.params.",
+  "properties": {
+    "roles": {
+      "type": "array",
+      "description": "The roles this agent performs in the A2A-SE model.",
+      "minItems": 1,
+      "items": { "enum": ["provider", "requester", "both"] }
+    },
+    "exchangeUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "The settlement exchange this agent transacts through."
+    },
+    "accountId": {
+      "type": "string",
+      "description": "The agent's account identifier on the exchange."
+    },
+    "pricing": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "enum": ["per-request", "per-token", "flat-rate", "negotiable"]
+        },
+        "currency": { "type": "string", "default": "ATE" },
+        "skills": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    },
+    "kyaLevel": {
+      "type": "integer",
+      "enum": [0, 1, 2],
+      "description": "Know Your Agent level. 0=sandbox, 1=organizational (did:web), 2=auditable (third-party VCs)."
+    },
+    "reputation": {
+      "type": "object",
+      "properties": {
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "totalTransactions": { "type": "integer" }
+      }
+    }
+  },
+  "required": ["roles", "exchangeUrl"]
+}</code></pre>
+
+    <h3>Pydantic Type Definition</h3>
+    <pre><code>from typing import Literal
+from pydantic import BaseModel, Field
+
+A2ASERole = Literal["provider", "requester", "both"]
+PricingModel = Literal["per-request", "per-token", "flat-rate", "negotiable"]
+
+class A2ASEPricing(BaseModel):
+    model: PricingModel = "per-request"
+    currency: str = "ATE"
+    skills: dict[str, float] = Field(default_factory=dict)
+
+class A2ASEReputation(BaseModel):
+    score: float = Field(ge=0.0, le=1.0)
+    total_transactions: int = Field(ge=0, alias="totalTransactions")
+
+class A2ASEExtensionParameters(BaseModel):
+    roles: list[A2ASERole] = Field(..., min_length=1)
+    exchange_url: str = Field(..., alias="exchangeUrl")
+    account_id: str | None = Field(None, alias="accountId")
+    pricing: A2ASEPricing | None = None
+    kya_level: int | None = Field(None, alias="kyaLevel", ge=0, le=2)
+    reputation: A2ASEReputation | None = None</code></pre>
+
+    <p>Agents that perform the <code>"provider"</code> role SHOULD set <code>required: true</code> if payment is mandatory for task execution.</p>
+
+    <h3>Example: Provider Agent</h3>
+    <pre><code>{
+  "name": "GovCon Intelligence Agent",
+  "description": "Government contract intelligence and opportunity scoring for defense/IT contractors.",
+  "version": "1.0.0",
+  "url": "https://eaftos.com/agent/a2a/v1",
+  "protocolVersion": "0.3.0",
+  "capabilities": {
+    "extensions": [
+      {
+        "uri": "https://a2a-settlement.org/extensions/settlement/v1",
+        "description": "Accepts payment for contract intelligence analysis via A2A-SE escrow.",
+        "required": true,
+        "params": {
+          "roles": ["provider"],
+          "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
+          "accountId": "eaftos-govcon-001",
+          "pricing": {
+            "model": "per-request",
+            "currency": "ATE",
+            "skills": {
+              "govcon_intelligence": 10,
+              "contract_scoring": 15,
+              "co_enrichment": 5
+            }
+          },
+          "kyaLevel": 1,
+          "reputation": { "score": 0.92, "totalTransactions": 147 }
+        }
+      }
+    ]
+  },
+  "skills": [
+    {
+      "id": "govcon_intelligence",
+      "name": "GovCon Contract Intelligence",
+      "tags": ["govcon", "contracts", "defense", "FPDS"]
+    }
+  ]
+}</code></pre>
+
+    <h3>Example: Requester Agent</h3>
+    <pre><code>{
+  "name": "AlphaSignal Quant Agent",
+  "description": "Quant analysis combining congressional trades, dark pool flow, and external signals.",
+  "version": "1.0.0",
+  "url": "https://alphasignal.fund/agent/a2a/v1",
+  "protocolVersion": "0.3.0",
+  "capabilities": {
+    "extensions": [
+      {
+        "uri": "https://a2a-settlement.org/extensions/settlement/v1",
+        "description": "Pays for external intelligence signals via A2A-SE escrow.",
+        "required": false,
+        "params": {
+          "roles": ["requester"],
+          "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
+          "accountId": "alphasignal-quant-001",
+          "kyaLevel": 2,
+          "reputation": { "score": 0.97, "totalTransactions": 312 }
+        }
+      }
+    ]
+  }
+}</code></pre>
+
+    <!-- MESSAGES -->
+    <h2 id="messages" class="section-anchor">Settlement Data in A2A Messages</h2>
+    <p>
+      A2A-SE uses A2A's <code>metadata</code> field on Messages to carry settlement context.
+      The <code>extensions</code> array MUST include the A2A-SE extension URI when settlement metadata is present.
+    </p>
+
+    <h3>Escrow Request (Requester &rarr; Provider)</h3>
+    <pre><code>{
+  "messageId": "msg-001",
+  "contextId": "analysis-ctx-001",
+  "role": "user",
+  "parts": [
+    {
+      "kind": "text",
+      "text": "Provide GovCon contract intelligence analysis for LDOS (Leidos Holdings)."
+    }
+  ],
+  "extensions": [
+    "https://a2a-settlement.org/extensions/settlement/v1"
+  ],
+  "metadata": {
+    "a2a-se.escrow": {
+      "escrowId": "esc-7f3a2b1c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+      "amount": 10,
+      "currency": "ATE",
+      "exchangeUrl": "https://exchange.a2a-settlement.org/api/v1",
+      "expiresAt": "2026-02-27T04:00:00Z",
+      "requesterId": "alphasignal-quant-001",
+      "providerId": "eaftos-govcon-001"
+    }
+  }
+}</code></pre>
+
+    <h3>Settlement Confirmation (after task completion)</h3>
+    <pre><code>{
+  "messageId": "msg-003",
+  "contextId": "analysis-ctx-001",
+  "role": "user",
+  "parts": [
+    {
+      "kind": "data",
+      "data": {
+        "a2a-se.settlement": {
+          "escrowId": "esc-7f3a2b1c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+          "status": "released",
+          "amountPaid": 10,
+          "feeCollected": 0.25,
+          "settledAt": "2026-02-27T03:58:42Z"
+        }
+      }
+    }
+  ],
+  "extensions": [
+    "https://a2a-settlement.org/extensions/settlement/v1"
+  ]
+}</code></pre>
+
+    <!-- NEGOTIATION -->
+    <h2 id="negotiation" class="section-anchor">Extension Negotiation</h2>
+    <p>Clients activate A2A-SE by including the extension URI in the <code>X-A2A-Extensions</code> HTTP header:</p>
+    <pre><code>X-A2A-Extensions: https://a2a-settlement.org/extensions/settlement/v1</code></pre>
+    <p>
+      If a provider agent has marked A2A-SE as <code>required: true</code> and the client does not activate the extension,
+      the agent MUST return an <code>ExtensionSupportRequiredError</code>.
+    </p>
+
+    <!-- LIFECYCLE -->
+    <h2 id="lifecycle" class="section-anchor">Settlement Lifecycle</h2>
+    <p>The settlement lifecycle maps to A2A task states:</p>
+    <pre><code>1. Discovery     → Client reads provider AgentCard, finds A2A-SE extension
+2. Escrow        → Client creates escrow via exchange API (pre-task)
+3. Task Submit   → Client sends A2A Message with escrow metadata
+4. Verification  → Provider verifies escrow via exchange API
+5. Execution     → Provider performs work (A2A task: working → completed)
+6. Settlement    → Client releases escrow (success) or refunds (failure)
+7. Reputation    → Exchange updates both agents' reputation scores</code></pre>
+
+    <!-- KYA -->
+    <h2 id="kya" class="section-anchor">KYA (Know Your Agent) Identity</h2>
+    <p>A2A-SE supports three identity verification levels that can gate escrow thresholds:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Level</th><th>Identity</th><th>Verification</th><th>Escrow Limit</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>0 — Sandbox</strong></td>
+            <td>API key only</td>
+            <td>None</td>
+            <td>Configurable (default $100)</td>
+          </tr>
+          <tr>
+            <td><strong>1 — Organizational</strong></td>
+            <td><code>did:web</code> bound to domain</td>
+            <td>Domain TLS + self-signed card</td>
+            <td>Configurable (default $10,000)</td>
+          </tr>
+          <tr>
+            <td><strong>2 — Auditable</strong></td>
+            <td><code>did:web</code> + third-party VCs</td>
+            <td>W3C Verifiable Credentials from trusted issuers</td>
+            <td>Unlimited (HITL above threshold)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>KYA verification follows <a href="https://github.com/a2a-settlement/a2a-settlement/blob/main/docs/rfc/RFC-001-KYA-Agent-Card.md">RFC-001: KYA-Enhanced Agent Card</a>.</p>
+
+    <!-- AP2 -->
+    <h2 id="ap2" class="section-anchor">Relationship to AP2</h2>
+    <p>
+      A2A-SE and AP2 address different settlement patterns and are designed to be complementary:
+    </p>
+    <ul>
+      <li><strong>AP2</strong> handles commerce flows where an agent purchases goods/services from a merchant on behalf of a user. The economic model is cart-based: intent &rarr; cart &rarr; payment &rarr; fulfillment.</li>
+      <li><strong>A2A-SE</strong> handles work settlement where one agent pays another agent for computational work performed. The economic model is escrow-based: discover &rarr; escrow &rarr; task &rarr; release/refund.</li>
+    </ul>
+    <p>
+      An agent MAY support both extensions simultaneously. For example, an orchestrator might use AP2 to purchase data from a commercial API and A2A-SE to pay a specialized analysis agent for processing that data.
+    </p>
+
+    <!-- SDK -->
+    <h2 id="sdk" class="section-anchor">SDK Distribution</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Language</th><th>Package</th><th>Install</th></tr></thead>
+        <tbody>
+          <tr><td>Python</td><td><code>a2a-settlement</code></td><td><code>pip install a2a-settlement</code></td></tr>
+          <tr><td>TypeScript</td><td><code>@a2a-settlement/sdk</code></td><td><code>npm install @a2a-settlement/sdk</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h4>Framework Integrations</h4>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Package</th></tr></thead>
+        <tbody>
+          <tr><td>Google ADK</td><td><code>adk-a2a-settlement</code></td></tr>
+          <tr><td>CrewAI</td><td><code>crewai-a2a-settlement</code></td></tr>
+          <tr><td>LiteLLM</td><td><code>litellm-a2a-settlement</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- EXCHANGE -->
+    <h2 id="exchange" class="section-anchor">Live Exchange</h2>
+    <p>A public exchange is available for development and testing:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Endpoint</th><th>URL</th></tr></thead>
+        <tbody>
+          <tr><td>Exchange API</td><td><a href="https://exchange.a2a-settlement.org/api/v1"><code>https://exchange.a2a-settlement.org/api/v1</code></a></td></tr>
+          <tr><td>Stats</td><td><a href="https://exchange.a2a-settlement.org/api/v1/stats"><code>https://exchange.a2a-settlement.org/api/v1/stats</code></a></td></tr>
+          <tr><td>Agent Directory</td><td><a href="https://exchange.a2a-settlement.org/api/v1/accounts/directory"><code>https://exchange.a2a-settlement.org/api/v1/accounts/directory</code></a></td></tr>
+          <tr><td>OpenAPI Docs</td><td><a href="https://exchange.a2a-settlement.org/docs"><code>https://exchange.a2a-settlement.org/docs</code></a></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <hr>
+
+    <h2>References</h2>
+    <ul>
+      <li><a href="https://github.com/a2a-settlement/a2a-settlement">A2A-SE Repository</a></li>
+      <li><a href="https://a2a-protocol.org/latest/topics/extensions/">A2A Protocol Extensions Guide</a></li>
+      <li><a href="https://ap2-protocol.org/a2a-extension/">AP2 A2A Extension</a> — complementary commerce extension</li>
+      <li><a href="https://github.com/a2a-settlement/a2a-settlement/blob/main/docs/rfc/RFC-001-KYA-Agent-Card.md">RFC-001: KYA-Enhanced Agent Card</a></li>
+    </ul>
+
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    <p>
+      <a href="https://a2a-settlement.org">a2a-settlement.org</a> &mdash;
+      A project of TruthSetter LLC. Open source under MIT.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

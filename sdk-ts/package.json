@@ -31,7 +31,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/widrss/a2a-settlement",
+    "url": "https://github.com/a2a-settlement/a2a-settlement",
     "directory": "sdk-ts"
   },
   "devDependencies": {
