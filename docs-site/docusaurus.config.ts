@@ -32,7 +32,30 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/a2a-settlement/a2a-settlement/tree/main/docs-site/',
         },
-        blog: false,
+        blog: {
+          path: 'blog',
+          routeBasePath: 'blog',
+          blogTitle: 'Essays',
+          blogDescription:
+            'Essays on Agent Settlement — the layer that decides whether an economic obligation between agents was satisfied.',
+          blogSidebarTitle: 'All essays',
+          blogSidebarCount: 'ALL',
+          showReadingTime: true,
+          postsPerPage: 10,
+          onInlineTags: 'throw',
+          onInlineAuthors: 'throw',
+          onUntruncatedBlogPosts: 'throw',
+          editUrl:
+            'https://github.com/a2a-settlement/a2a-settlement/tree/main/docs-site/',
+          feedOptions: {
+            type: 'all',
+            title: 'A2A Settlement — Essays',
+            description:
+              'Essays on the settlement layer of autonomous agent commerce.',
+            copyright: `Copyright © ${new Date().getFullYear()} TruthSetter LLC.`,
+            xslt: true,
+          },
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -69,6 +92,7 @@ const config: Config = {
         { to: '/docs/integrations/', label: 'Implementations', position: 'left' },
         { to: '/docs/architecture/nist-compliance', label: 'Security', position: 'left' },
         { to: '/docs/standards/', label: 'Standards', position: 'left' },
+        { to: '/blog', label: 'Essays', position: 'left' },
         {
           href: 'https://sandbox.a2a-settlement.org',
           label: 'Run a Settlement',
@@ -88,6 +112,7 @@ const config: Config = {
           title: 'Documentation',
           items: [
             { label: 'What is Agent Settlement?', to: '/docs/agent-settlement/' },
+            { label: 'Essays', to: '/blog' },
             { label: 'Introduction', to: '/docs/intro' },
             { label: 'Specification', to: '/docs/spec/' },
             { label: 'Standards & Provenance', to: '/docs/standards/' },
