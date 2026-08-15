@@ -14,6 +14,15 @@ npm run build
 
 Output: `build/` directory (static files).
 
+`package-lock.json` is committed (the repo root `.gitignore` negates it for this
+directory only) and is the record of the tree that produces the deployed site.
+Use `npm ci` so the build is reproducible. Regenerating the lockfile from scratch
+currently breaks the build: webpack arrives only as a transitive dependency of
+`@docusaurus/core` at `^5.95.0`, and releases after 5.105.3 tightened the
+`ProgressPlugin` schema so it rejects the `name` and `color` options that
+`webpackbar` 6.0.1 passes. Upgrading Docusaurus is the real remedy; until then,
+keep the lockfile authoritative.
+
 ## Deploy (this droplet)
 
 ```bash
