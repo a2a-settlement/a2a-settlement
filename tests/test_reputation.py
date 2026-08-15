@@ -33,7 +33,9 @@ def test_reputation_updates_on_release_and_refund(exchange_app, auth_header):
         bal1 = client.get("/v1/exchange/balance", headers=auth_header(provider_key)).json()
         assert abs(bal1["reputation"] - 0.55) < 1e-9
 
-        # Refund -> rep = 0.9*0.55 + 0.1*0 = 0.495
+        # A refund before delivery is not the provider's failure, so the score holds.
+        # Penalising it would let a requester sink any provider by opening and
+        # refunding escrows.
         escrow2 = client.post(
             "/v1/exchange/escrow",
             headers=auth_header(requester_key),
@@ -42,7 +44,24 @@ def test_reputation_updates_on_release_and_refund(exchange_app, auth_header):
         client.post("/v1/exchange/refund", headers=auth_header(requester_key), json={"escrow_id": escrow2["escrow_id"]})
 
         bal2 = client.get("/v1/exchange/balance", headers=auth_header(provider_key)).json()
-        assert abs(bal2["reputation"] - 0.495) < 1e-9
+        assert abs(bal2["reputation"] - 0.55) < 1e-9
+
+        # Refund after delivery is a provider failure -> rep = 0.9*0.55 + 0.1*0 = 0.495
+        escrow3 = client.post(
+            "/v1/exchange/escrow",
+            headers=auth_header(requester_key),
+            json={"provider_id": provider_id, "amount": 10},
+        ).json()
+        deliver = client.post(
+            f"/v1/exchange/escrow/{escrow3['escrow_id']}/deliver",
+            headers=auth_header(provider_key),
+            json={"content": "sentiment: positive"},
+        )
+        assert deliver.status_code == 200, deliver.text
+        client.post("/v1/exchange/refund", headers=auth_header(requester_key), json={"escrow_id": escrow3["escrow_id"]})
+
+        bal3 = client.get("/v1/exchange/balance", headers=auth_header(provider_key)).json()
+        assert abs(bal3["reputation"] - 0.495) < 1e-9
 
 
 def test_reputation_endpoint_public(exchange_app, auth_header):
