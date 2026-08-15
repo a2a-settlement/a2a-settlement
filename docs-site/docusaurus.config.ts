@@ -46,6 +46,14 @@ const config: Config = {
       defaultMode: 'dark',
       respectPrefersColorScheme: true,
     },
+    announcementBar: {
+      id: 'zenodo-dois',
+      content:
+        'NIST comments archived on Zenodo: <a target="_blank" rel="noopener noreferrer" href="https://doi.org/10.5281/zenodo.21745191">CAISI DOI</a> · <a target="_blank" rel="noopener noreferrer" href="https://doi.org/10.5281/zenodo.21745274">NCCoE DOI</a>',
+      backgroundColor: '#1a8870',
+      textColor: '#ffffff',
+      isCloseable: true,
+    },
     navbar: {
       title: 'A2A Settlement',
       logo: {
@@ -108,6 +116,8 @@ const config: Config = {
             { label: 'SettleBridge (product)', href: 'https://settlebridge.ai' },
             { label: 'GitHub Org', href: 'https://github.com/a2a-settlement' },
             { label: 'NIST / Standards', to: '/docs/standards/' },
+            { label: 'CAISI DOI', href: 'https://doi.org/10.5281/zenodo.21745191' },
+            { label: 'NCCoE DOI', href: 'https://doi.org/10.5281/zenodo.21745274' },
           ],
         },
       ],
