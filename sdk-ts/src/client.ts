@@ -50,7 +50,9 @@ async function hmacSha256(key: string, message: Uint8Array): Promise<string> {
     false,
     ["sign"],
   );
-  const sig = await crypto.subtle.sign("HMAC", cryptoKey, message);
+  // Re-wrap so the view is ArrayBuffer-backed: BufferSource excludes
+  // SharedArrayBuffer-backed views, which bare Uint8Array may be as of TS 5.7.
+  const sig = await crypto.subtle.sign("HMAC", cryptoKey, new Uint8Array(message));
   return Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
