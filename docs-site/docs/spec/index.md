@@ -1,7 +1,8 @@
 # A2A-SE Specification
 
 **Version:** v0.11.0  
-**Extension URI:** `https://a2a-settlement.org/extensions/settlement/v1`
+**Extension URI:** `https://a2a-settlement.org/extensions/settlement/v1`  
+**DOI:** [10.5281/zenodo.21953795](https://doi.org/10.5281/zenodo.21953795) (v0.11.0) · [10.5281/zenodo.21953794](https://doi.org/10.5281/zenodo.21953794) (all versions)
 
 The A2A Settlement Extension (A2A-SE) defines **settlement semantics** for the A2A task lifecycle. It is designed as a native A2A Extension per Section 4.6 of the A2A specification — **zero modifications to A2A core**.
 

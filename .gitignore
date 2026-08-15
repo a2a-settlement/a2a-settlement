@@ -15,6 +15,11 @@ __pycache__/
 
 node_modules/
 package-lock.json
+# The docs site is built from this repo, so its lockfile must be tracked:
+# webpack is only a transitive dep of @docusaurus/core (^5.95.0), and unpinned
+# resolution now picks a webpack whose ProgressPlugin schema rejects the options
+# webpackbar sends, breaking the build.
+!docs-site/package-lock.json
 
 build/
 dist/

@@ -43,7 +43,7 @@ RequesterAgent  <---- A2A ---->  ProviderAgent
 | **Federation** (optional) | [a2a-federation-rfc](https://github.com/a2a-settlement/a2a-federation-rfc) |
 | **Reference implementation** | this repo (`exchange/`) |
 | **Docs / category definition** | [What is Agent Settlement?](https://docs.a2a-settlement.org/docs/agent-settlement/) |
-| **DOI / archival** | pending Zenodo deposit |
+| **DOI / archival** | SPEC v0.11.0 [10.5281/zenodo.21953795](https://doi.org/10.5281/zenodo.21953795) ([all versions](https://doi.org/10.5281/zenodo.21953794)) · NIST comments [CAISI](https://doi.org/10.5281/zenodo.21745191) · [NCCoE](https://doi.org/10.5281/zenodo.21745274) |
 
 ## Run a settlement
 

@@ -1,0 +1,29 @@
+standards:
+  label: Standards
+  permalink: /standards
+  description: Standards bodies, public comment, and normative artifacts.
+
+provenance:
+  label: Provenance
+  permalink: /provenance
+  description: Archival records, DOIs, and verifiable claims about who published what, when.
+
+security:
+  label: Security
+  permalink: /security
+  description: Threat models and adversarial testing of the settlement layer.
+
+verification:
+  label: Verification
+  permalink: /verification
+  description: Deciding whether a deliverable is what it claims to be.
+
+federation:
+  label: Federation
+  permalink: /federation
+  description: Interoperability across independently operated exchanges.
+
+reputation:
+  label: Reputation
+  permalink: /reputation
+  description: Settlement-derived behavioral reputation and its portability.
