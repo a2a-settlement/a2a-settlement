@@ -4,7 +4,7 @@ The Economic Air Gap is a security and settlement layer that sits between an AI 
 
 ## The Three Components
 
-### 1. A2A Settlement Extension (A2A-SE) -- Escrow-Based Payments
+### 1. A2A Settlement Extension (A2A-SE) -- Settlement Semantics
 
 Instead of giving an agent open-ended access to a credit card or API key, it operates on a micro-budget held in a smart escrow. Funds are only released if the task is successfully completed and verified.
 
