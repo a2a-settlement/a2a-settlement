@@ -11,7 +11,7 @@
   "did_document": "https://api.algovoi.co.uk/.well-known/did.json",
   "context": {
     "thread": "https://github.com/a2aproject/A2A/discussions/1576",
-    "eriknewton_commitment": "https://github.com/a2aproject/A2A/discussions/1576#discussioncomment-16970991",
+    "eriknewton_commitment": "https://github.com/a2aproject/A2A/discussions/1576#discussioncomment-16970635",
     "categories_pending": [
       "dispute_dos",
       "reputation_manipulation",
