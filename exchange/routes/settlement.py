@@ -110,6 +110,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _ensure_aware(dt: datetime) -> datetime:
+    """SQLite returns naive datetimes; assume UTC when tzinfo is absent."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _fee_amount(amount: int) -> int:
     pct = Decimal(str(settings.fee_percent)) / Decimal("100")
     fee = (Decimal(amount) * pct).to_integral_value(rounding=ROUND_CEILING)
@@ -2028,7 +2035,9 @@ def submit_evidence(
                 status_code=400,
                 detail=f"Evidence cannot be submitted (status: {escrow.status})",
             )
-        if escrow.evidence_window_closes_at and now > escrow.evidence_window_closes_at:
+        if escrow.evidence_window_closes_at and now > _ensure_aware(
+            escrow.evidence_window_closes_at
+        ):
             raise HTTPException(
                 status_code=400, detail="Evidence window has closed"
             )
