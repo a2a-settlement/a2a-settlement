@@ -1,8 +1,8 @@
 # a2a-settlement
 
-Escrow-based payment settlement for the [A2A protocol](https://github.com/google/A2A).
+Python SDK for the [A2A Settlement Extension (A2A-SE)](https://a2a-settlement.org) — the settlement layer for autonomous agent commerce.
 
-**A2A-SE** holds funds in escrow during task execution and releases them on completion — or refunds them on failure. Zero modifications to A2A core. Currency-agnostic.
+**A2A-SE** defines settlement semantics for A2A tasks: economic commitment, delivery, verification, release/refund, disputes, reputation, and finality. Escrow is one mechanism that implements commitment. Zero modifications to A2A core. Currency-agnostic.
 
 ```
 RequesterAgent  <---- A2A ---->  ProviderAgent
