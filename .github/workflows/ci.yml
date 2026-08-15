@@ -1,0 +1,86 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+# Outside contributors file PRs here; the token they run under needs no write scope.
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  exchange:
+    name: Exchange, compliance, identity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[exchange,identity,compliance,dev]"
+      # python -m keeps the repo root on sys.path, which tests/conftest.py relies on.
+      - run: python -m pytest tests/ -v
+  shim:
+    name: Security shim
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-shim.txt
+      # shim/tests drives ShimProxy through @pytest.mark.asyncio coroutines.
+      - run: pip install -r requirements-shim.txt pytest pytest-asyncio
+      - run: python -m pytest shim/tests -v
+  sdk-python:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: sdk/pyproject.toml
+      - run: pip install -e ".[identity,dev]"
+      - run: python -m pytest tests -v
+  sdk-typescript:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # No lockfile is committed here, so npm ci and the npm cache are unavailable.
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+  docs-site:
+    name: Docs site
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      # npm ci, not npm install: an unpinned resolution picks a webpack that
+      # webpackbar cannot drive. See docs-site/DEPLOYMENT.md.
+      - run: npm ci
+      # Docusaurus fails the build on broken internal links.
+      - run: npm run build
