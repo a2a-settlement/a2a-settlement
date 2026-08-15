@@ -28,10 +28,25 @@ rsync -a --delete build/ /var/www/docs.a2a-settlement.org/
 docs.a2a-settlement.org, docs.settlebridge.ai {
 	encode zstd gzip
 	root * /var/www/docs.a2a-settlement.org
-	try_files {path} {path}/ /index.html
+
+	@docs_root path /docs /docs/
+	redir @docs_root /docs/intro/ permanent
+
+	try_files {path} {path}/
 	file_server
+
+	handle_errors 404 {
+		rewrite * /404.html
+		file_server {
+			status 404
+		}
+	}
 }
 ```
+
+Do not add `/index.html` to `try_files`. Docusaurus pre-renders every route, so an
+index fallback makes removed pages and missing assets answer `200` with homepage
+HTML instead of `404` — which silently hides dangling references such as `og:image`.
 
 ## DNS
 
