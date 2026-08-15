@@ -12,7 +12,7 @@ type FeatureItem = {
 const FeatureList: FeatureItem[] = [
   {
     title: 'Payments',
-    Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
+    Svg: require('@site/static/img/layer-payments.svg').default,
     description: (
       <>
         How value moves — rails, tokens, micropayments. A2A-SE sits above or
@@ -22,7 +22,7 @@ const FeatureList: FeatureItem[] = [
   },
   {
     title: 'Authorization',
-    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
+    Svg: require('@site/static/img/layer-authorization.svg').default,
     description: (
       <>
         Whether an agent may spend — limits, policies, delegation. Complements
@@ -32,7 +32,7 @@ const FeatureList: FeatureItem[] = [
   },
   {
     title: 'Settlement',
-    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
+    Svg: require('@site/static/img/layer-settlement.svg').default,
     description: (
       <>
         Whether the economic obligation was satisfied and what happens to
