@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import and_, func as sa_func, select
 from sqlalchemy.orm import Session
 
 from exchange.auth import authenticate_bot, authenticate_bot_optional
@@ -895,22 +895,48 @@ def get_principal(
             .order_by(AgentPrincipalLink.confidence.desc())
         ).all()
 
-    return {
-        "agent_id": account_id,
-        "links": [
-            {
-                "principal_id": link.AgentPrincipalLink.principal_id,
-                "principal_type": link.Principal.principal_type,
-                "kya_level": link.Principal.kya_level,
-                "link_source": link.AgentPrincipalLink.link_source,
-                "confidence": link.AgentPrincipalLink.confidence,
-                "established_at": link.AgentPrincipalLink.established_at.isoformat()
-                if link.AgentPrincipalLink.established_at
+        link_payloads = []
+        for link in links:
+            principal = link.Principal
+            apl = link.AgentPrincipalLink
+            low_conf_peer_count = session.execute(
+                select(sa_func.count())
+                .select_from(AgentPrincipalLink)
+                .where(
+                    and_(
+                        AgentPrincipalLink.principal_id == principal.id,
+                        AgentPrincipalLink.confidence < 0.5,
+                    )
+                )
+            ).scalar_one()
+            entry = {
+                "principal_id": apl.principal_id,
+                "principal_type": principal.principal_type,
+                "kya_level": principal.kya_level,
+                "link_source": apl.link_source,
+                "confidence": apl.confidence,
+                "established_at": apl.established_at.isoformat()
+                if apl.established_at
                 else None,
+                "risk_score": principal.risk_score,
+                "low_confidence_peer_count": int(low_conf_peer_count),
             }
-            for link in links
-        ],
+            if (principal.risk_score or 0.0) >= 0.6:
+                entry["sybil_risk"] = True
+            link_payloads.append(entry)
+
+    primary = link_payloads[0] if link_payloads else None
+    body: dict = {
+        "agent_id": account_id,
+        "links": link_payloads,
+        "risk_score": primary["risk_score"] if primary else None,
+        "low_confidence_peer_count": (
+            primary["low_confidence_peer_count"] if primary else 0
+        ),
     }
+    if primary and primary.get("sybil_risk"):
+        body["sybil_risk"] = True
+    return body
 
 
 @router.get("/accounts/{account_id}/counterparty-diversity", tags=["Accounts"])

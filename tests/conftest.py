@@ -14,8 +14,10 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 @pytest.fixture()
 def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    # Isolated DB per test.
-    monkeypatch.setenv("A2A_EXCHANGE_DATABASE_URL", f"sqlite:///{tmp_path / 'exchange.db'}")
+    # Isolated DB per test. DATABASE_URL wins over A2A_EXCHANGE_DATABASE_URL in Settings.
+    db_url = f"sqlite:///{tmp_path / 'exchange.db'}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("A2A_EXCHANGE_DATABASE_URL", db_url)
     monkeypatch.setenv("A2A_EXCHANGE_AUTO_CREATE_SCHEMA", "true")
     monkeypatch.setenv("A2A_EXCHANGE_STARTER_TOKENS", "100")
     monkeypatch.setenv("A2A_EXCHANGE_FEE_PERCENT", "0.25")

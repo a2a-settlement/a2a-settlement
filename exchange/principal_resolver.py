@@ -66,12 +66,19 @@ def invalidate_cache(agent_id: str) -> None:
 # ---------------------------------------------------------------------------
 # KYA level → confidence mapping
 # ---------------------------------------------------------------------------
+#
+# Confidence hygiene for future reputation inheritance (NOT implemented yet):
+# payment_graph links (≤0.4) and bare registration (0.3 / KYA 0) must never
+# unlock reputation inheritance. Only hard_match (≥0.8), manual (1.0), and
+# KYA≥2 registration (0.9) are eligible when inheritance lands in a later PR.
+# Do not blend reputation across agents linked only via low-confidence edges.
+# ---------------------------------------------------------------------------
 
 _KYA_CONFIDENCE: dict[int, float] = {
-    0: 0.3,   # none
+    0: 0.3,   # none — registration smell only; not inheritance-eligible
     1: 0.5,   # basic (email verified)
-    2: 0.9,   # attested (VC / DID)
-    3: 0.9,   # verified (full KYA)
+    2: 0.9,   # attested (VC / DID) — inheritance-eligible when shipped
+    3: 0.9,   # verified (full KYA) — inheritance-eligible when shipped
 }
 
 
