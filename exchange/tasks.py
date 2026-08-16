@@ -256,19 +256,80 @@ def run_diversity_sweep() -> dict:
                         peer_obj = session.get(Account, peer)
                         if peer_obj is None:
                             continue
+                        # Confidence hygiene: payment_graph caps at 0.4 and must never
+                        # unlock reputation inheritance (see principal_resolver module doc).
                         confidence = 0.4 if peer in neighbors else 0.25
                         link_agent_to_principal(
                             peer, principal_id, "payment_graph", confidence, session
                         )
                         linked += 1
 
+        # Pass 3: Sybil-smell risk_score on principals from low-confidence clusters.
+        with session.begin():
+            risked = _update_principal_risk_scores(session)
+
         logger.info(
-            "Diversity sweep complete: %d accounts updated, %d payment-graph links written",
-            updated, linked,
+            "Diversity sweep complete: %d accounts updated, %d payment-graph links written, "
+            "%d principals risk-scored",
+            updated, linked, risked,
         )
-        return {"accounts_updated": updated, "payment_graph_links": linked}
+        return {
+            "accounts_updated": updated,
+            "payment_graph_links": linked,
+            "principals_risk_scored": risked,
+        }
     finally:
         session.close()
+
+
+def _update_principal_risk_scores(session: Session) -> int:
+    """Write Principal.risk_score from low-confidence peer Sybil smell.
+
+    Heuristic (fixed for this phase — no reputation inheritance):
+    - Count agents linked to the principal with confidence < 0.5.
+    - If that count >= 5 and mean diversity_score of those agents is < 0.3,
+      set risk_score = min(1.0, 0.2 * count).
+    - Otherwise decay existing risk_score toward 0.
+    """
+    from exchange.models import Account, AgentPrincipalLink, Principal
+
+    principals = session.execute(select(Principal)).scalars().all()
+    updated = 0
+    for principal in principals:
+        rows = session.execute(
+            select(AgentPrincipalLink, Account)
+            .join(Account, Account.id == AgentPrincipalLink.agent_id)
+            .where(
+                and_(
+                    AgentPrincipalLink.principal_id == principal.id,
+                    AgentPrincipalLink.confidence < 0.5,
+                )
+            )
+        ).all()
+        low_conf_count = len(rows)
+        diversities = [
+            row.Account.diversity_score
+            for row in rows
+            if row.Account.diversity_score is not None
+        ]
+        mean_diversity = (
+            sum(diversities) / len(diversities) if diversities else None
+        )
+
+        if (
+            low_conf_count >= 5
+            and mean_diversity is not None
+            and mean_diversity < 0.3
+        ):
+            principal.risk_score = min(1.0, 0.2 * low_conf_count)
+        else:
+            current = float(principal.risk_score or 0.0)
+            principal.risk_score = (
+                round(current * 0.5, 4) if current > 0.001 else 0.0
+            )
+        session.add(principal)
+        updated += 1
+    return updated
 
 
 async def background_diversity_loop() -> None:
