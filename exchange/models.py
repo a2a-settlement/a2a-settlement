@@ -303,6 +303,15 @@ class Escrow(Base):
     hitl_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     hitl_approval_vc: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Shadow-mode trust tiers (docs/trust-tiers.md) — recorded at create, not enforced
+    requester_trust_state: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    provider_trust_state: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    requester_task_count: Mapped[int | None] = mapped_column(nullable=True)
+    requester_dispute_rate: Mapped[float | None] = mapped_column(nullable=True)
+    trust_tier_shadow: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+
     __table_args__ = (
         Index(
             "uq_active_task_escrow",

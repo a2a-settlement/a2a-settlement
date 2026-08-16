@@ -55,6 +55,7 @@ from exchange.schemas import (
 from exchange.compliance_log import get_escrow_attestations, log_settlement_event
 from exchange.reputation_metrics import EMA_LAMBDA, compute_reputation_metrics
 from exchange.principal_resolver import classify_transaction
+from exchange.trust_tiers import log_trust_tier_shadow, snapshot_trust_tiers
 from exchange.spending_guard import SpendingLimitGuard
 from exchange.tasks import expire_stale_escrows as _expire_stale_escrows
 from exchange.webhooks import fire_webhook_event
@@ -810,6 +811,21 @@ def create_escrow(
 
         escrow_sdc = classify_transaction(current["id"], req.provider_id, session)
 
+        requester_acct = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one()
+        trust_kwargs: dict = {}
+        trust_snap = None
+        if settings.trust_tier_shadow_enabled:
+            trust_snap = snapshot_trust_tiers(session, requester_acct, provider)
+            trust_kwargs = {
+                "requester_trust_state": trust_snap.requester_trust_state,
+                "provider_trust_state": trust_snap.provider_trust_state,
+                "requester_task_count": trust_snap.requester_task_count,
+                "requester_dispute_rate": trust_snap.requester_dispute_rate,
+                "trust_tier_shadow": True,
+            }
+
         escrow = Escrow(
             requester_id=current["id"],
             provider_id=req.provider_id,
@@ -829,9 +845,15 @@ def create_escrow(
             kya_level_at_creation=kya_gate["required_level"],
             hitl_required=kya_gate["hitl_required"],
             self_dealing_class=escrow_sdc,
+            **trust_kwargs,
         )
         session.add(escrow)
         session.flush()
+
+        if trust_snap is not None:
+            log_trust_tier_shadow(
+                escrow_id=escrow.id, amount=req.amount, snapshot=trust_snap
+            )
 
         session.add(
             Transaction(
@@ -1890,6 +1912,21 @@ def batch_create_escrow(
                 else None
             )
 
+            requester_acct = session.execute(
+                select(Account).where(Account.id == current["id"])
+            ).scalar_one()
+            trust_kwargs: dict = {}
+            trust_snap = None
+            if settings.trust_tier_shadow_enabled:
+                trust_snap = snapshot_trust_tiers(session, requester_acct, provider)
+                trust_kwargs = {
+                    "requester_trust_state": trust_snap.requester_trust_state,
+                    "provider_trust_state": trust_snap.provider_trust_state,
+                    "requester_task_count": trust_snap.requester_task_count,
+                    "requester_dispute_rate": trust_snap.requester_dispute_rate,
+                    "trust_tier_shadow": True,
+                }
+
             escrow = Escrow(
                 requester_id=current["id"],
                 provider_id=item.provider_id,
@@ -1908,10 +1945,16 @@ def batch_create_escrow(
                 provider_did=kya_gate["provider_did"],
                 kya_level_at_creation=kya_gate["required_level"],
                 hitl_required=kya_gate["hitl_required"],
+                **trust_kwargs,
             )
             session.add(escrow)
             session.flush()
             created_escrows.append(escrow)
+
+            if trust_snap is not None:
+                log_trust_tier_shadow(
+                    escrow_id=escrow.id, amount=item.amount, snapshot=trust_snap
+                )
 
             session.add(
                 Transaction(
