@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from exchange.auth import authenticate_bot
+from exchange.auth import authenticate_bot, authenticate_bot_optional
 from exchange.config import get_session, settings
 from exchange.ratelimit import limiter
 from exchange.models import Account, Balance, GatewayClaim, Transaction
@@ -75,7 +75,18 @@ router = APIRouter()
 )
 @limiter.exempt
 def register(req: RegisterRequest, session: Session = Depends(get_session)) -> RegisterResponse:
-    if settings.invite_code and req.invite_code != settings.invite_code:
+    if req.account_type == "gateway":
+        if not settings.gateway_invite_code:
+            raise HTTPException(
+                status_code=403,
+                detail="Gateway registration is not enabled on this exchange",
+            )
+        if req.invite_code != settings.gateway_invite_code:
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid or missing gateway invite code",
+            )
+    elif settings.invite_code and req.invite_code != settings.invite_code:
         raise HTTPException(status_code=403, detail="Invalid or missing invite code")
 
     api_key = f"ate_{secrets.token_hex(16)}"
@@ -150,18 +161,24 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
 def _directory_account_response(
     acct: Account, claims: list[GatewayClaim] | None = None
 ) -> DirectoryAccountResponse:
-    """Build a public-safe response for the directory (no contact_email)."""
+    """Build a public-safe response for the directory (no contact_email).
+
+    Only key-verified gateway claims are included — unverified soft claims are
+    not published so attacker-controlled gateway names cannot appear on profiles.
+    """
     claim_info = None
     if claims:
-        claim_info = [
-            GatewayClaimInfo(
-                gateway_id=c.gateway_id,
-                gateway_name=c.gateway.bot_name if c.gateway else "",
-                verified=c.verified,
-                claimed_at=c.claimed_at,
-            )
-            for c in claims
-        ]
+        verified_claims = [c for c in claims if c.verified]
+        if verified_claims:
+            claim_info = [
+                GatewayClaimInfo(
+                    gateway_id=c.gateway_id,
+                    gateway_name=c.gateway.bot_name if c.gateway else "",
+                    verified=c.verified,
+                    claimed_at=c.claimed_at,
+                )
+                for c in verified_claims
+            ]
     return DirectoryAccountResponse(
         id=acct.id,
         bot_name=acct.bot_name,
@@ -373,11 +390,16 @@ def unclaim_agent(
     response_model=ClaimListResponse,
     tags=["Accounts"],
 )
-def list_claims(
+async def list_claims(
     account_id: str,
     session: Session = Depends(get_session),
+    current: dict | None = Depends(authenticate_bot_optional),
 ) -> ClaimListResponse:
-    """List which gateways have claimed an agent."""
+    """List which gateways have claimed an agent.
+
+    Public callers see only key-verified claims. The claimed agent or a
+    claiming gateway (authenticated) also see soft/unverified claims.
+    """
     with session.begin():
         claims = (
             session.execute(
@@ -389,6 +411,18 @@ def list_claims(
             .scalars()
             .all()
         )
+
+        if current is None:
+            visible = [c for c in claims if c.verified]
+        elif current["id"] == account_id:
+            visible = list(claims)
+        else:
+            visible = [
+                c
+                for c in claims
+                if c.verified or c.gateway_id == current["id"]
+            ]
+
     return ClaimListResponse(
         claims=[
             ClaimResponse(
@@ -399,9 +433,9 @@ def list_claims(
                 status=c.status,
                 claimed_at=c.claimed_at,
             )
-            for c in claims
+            for c in visible
         ],
-        count=len(claims),
+        count=len(visible),
     )
 
 

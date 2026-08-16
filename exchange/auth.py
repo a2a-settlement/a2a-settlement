@@ -113,3 +113,25 @@ async def authenticate_bot(
                 }
 
     raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+async def authenticate_bot_optional(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_a2a_signature: str | None = Header(default=None),
+    x_a2a_timestamp: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> dict | None:
+    """Like authenticate_bot, but returns None when no Authorization header is present.
+
+    Invalid credentials still raise 401 — only a missing header is treated as anonymous.
+    """
+    if not authorization:
+        return None
+    return await authenticate_bot(
+        request,
+        authorization=authorization,
+        x_a2a_signature=x_a2a_signature,
+        x_a2a_timestamp=x_a2a_timestamp,
+        session=session,
+    )

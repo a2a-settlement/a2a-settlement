@@ -116,6 +116,9 @@ class Settings:
     # Invite code (empty = open registration)
     invite_code: str = os.getenv("A2A_EXCHANGE_INVITE_CODE", "")
 
+    # Gateway registration (empty = gateway accounts cannot be registered)
+    gateway_invite_code: str = os.getenv("A2A_EXCHANGE_GATEWAY_INVITE_CODE", "")
+
     # Request signatures
     require_signatures: bool = _get_bool("A2A_EXCHANGE_REQUIRE_SIGNATURES", False)
     signature_max_age_seconds: int = _get_int("A2A_EXCHANGE_SIGNATURE_MAX_AGE", 300)
