@@ -14,7 +14,7 @@ function HomepageHeader() {
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
       <div className="container">
         <Heading as="h1" className="hero__title">
-          {siteConfig.title}
+          Agent Settlement
         </Heading>
         <p className="hero__subtitle">{siteConfig.tagline}</p>
         <p style={{opacity: 0.9, maxWidth: 640, margin: '0 auto 1.5rem'}}>
@@ -47,7 +47,7 @@ function HomepageHeader() {
 export default function Home(): ReactNode {
   return (
     <Layout
-      title="Agent Settlement — A2A-SE"
+      title="Agent Settlement"
       description="A2A-SE is an open standard for the settlement layer of autonomous agent commerce. Payments move value; authorization permits spend; settlement decides finality.">
       <HomepageHeader />
       <main>

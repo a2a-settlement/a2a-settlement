@@ -3,7 +3,7 @@ import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
-  title: 'A2A Settlement',
+  title: 'A2A-SE',
   tagline: 'The settlement layer for autonomous agent commerce',
   favicon: 'img/favicon.ico',
 
@@ -65,6 +65,11 @@ const config: Config = {
 
   themeConfig: {
     image: 'img/a2a-settlement-social.png',
+    metadata: [
+      {name: 'twitter:card', content: 'summary_large_image'},
+      {property: 'og:site_name', content: 'A2A-SE'},
+      {property: 'og:type', content: 'website'},
+    ],
     colorMode: {
       defaultMode: 'dark',
       respectPrefersColorScheme: true,
