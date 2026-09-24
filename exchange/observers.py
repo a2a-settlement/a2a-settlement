@@ -47,6 +47,20 @@ def _refund_escrow(session: Session, escrow: Escrow, now: datetime, description:
     )
 
 
+def _return_dispute_stake(session: Session, escrow: Escrow) -> None:
+    """Return a held dispute stake to the filer on a terminal timeout path.
+
+    A timeout is never operator-adjudicated, so no fault has been found and the
+    stake goes back to whoever filed the dispute. Only an explicit operator
+    ruling via the ``resolve`` endpoint can forfeit it to the counterparty.
+    Reuses ``_settle_dispute_stake`` so the ledger/transaction logic stays in
+    one place (imported lazily to avoid a routes<->observers import cycle).
+    """
+    from exchange.routes.settlement import _settle_dispute_stake
+
+    _settle_dispute_stake(session, escrow, None)
+
+
 class PaymentTimeoutObserver:
     """Observes escrow deadlines and transitions timed-out escrows to expired."""
 
@@ -95,6 +109,7 @@ class PaymentTimeoutObserver:
         expired: list[Escrow] = []
         for escrow in stale:
             _refund_escrow(session, escrow, now, "Auto-expired: dispute TTL exceeded")
+            _return_dispute_stake(session, escrow)
             expired.append(escrow)
         return expired
 
@@ -179,6 +194,9 @@ class PaymentTimeoutObserver:
                 else:
                     self._release_escrow(session, escrow, now)
                     escrow.status = "released"
+                # Default judgment: the non-responding respondent lost, so the
+                # filer prevailed and their dispute stake is returned.
+                _return_dispute_stake(session, escrow)
                 escrow.resolved_at = now
                 session.add(escrow)
                 defaulted.append(escrow)
