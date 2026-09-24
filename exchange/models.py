@@ -172,6 +172,10 @@ class Account(Base):
         String(20), nullable=False, default="agent", server_default="agent"
     )
 
+    # Experiment binding. Set only by operator bootstrap; callers cannot choose these.
+    obligation_policy_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    root_budget_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
     gateway_claims: Mapped[list["GatewayClaim"]] = relationship(
         back_populates="agent",
         foreign_keys="GatewayClaim.account_id",
@@ -312,6 +316,15 @@ class Escrow(Base):
         Boolean, nullable=False, default=True, server_default="true"
     )
 
+    # Stamped from the account's obligation policy at create time.
+    obligation_policy_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    root_budget_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    criteria_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acceptance_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    delivered_artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     __table_args__ = (
         Index(
             "uq_active_task_escrow",
@@ -401,6 +414,106 @@ class GatewayClaim(Base):
         Index("uq_gateway_claim", "gateway_id", "account_id", unique=True),
         CheckConstraint(
             "status IN ('active', 'released')", name="ck_gateway_claim_status"
+        ),
+    )
+
+
+class RootBudget(Base):
+    """Integer root budget locked in the same transaction as a balance change."""
+
+    __tablename__ = "root_budgets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal_account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    limit_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reserved_units: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    spent_units: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ObligationPolicy(Base):
+    """Trusted approval policy. Workers cannot write or downgrade this row."""
+
+    __tablename__ = "obligation_policies"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal_account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    task_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    criteria_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    authorized_approver_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False
+    )
+    root_budget_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("root_budgets.id"), nullable=False
+    )
+    acceptance_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AcceptanceRecord(Base):
+    """Approval bound to a task, criteria hash, artifact, and authorized approver."""
+
+    __tablename__ = "acceptance_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    policy_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("obligation_policies.id"), nullable=False, index=True
+    )
+    task_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    criteria_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    approver_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_acceptance_binding",
+            "policy_id",
+            "task_id",
+            "criteria_hash",
+            "artifact_sha256",
+            unique=True,
+        ),
+    )
+
+
+class FinancialOperation(Base):
+    """Idempotency record committed in the same transaction as the ledger effect."""
+
+    __tablename__ = "financial_operations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    method: Mapped[str] = mapped_column(String(10), nullable=False)
+    route: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_body: Mapped[str] = mapped_column(Text, nullable=False)
+    status_code: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_financial_operation_scope",
+            "principal_id",
+            "method",
+            "route",
+            "idempotency_key",
+            unique=True,
         ),
     )
 

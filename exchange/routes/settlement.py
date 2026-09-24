@@ -7,11 +7,21 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_CEILING, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func as sa_func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from exchange.assurance_ledger import (
+    artifact_sha256,
+    commit_spend,
+    reject_instant_settle_if_bound,
+    release_reservation,
+    require_acceptance,
+    stamp_escrow,
+)
 from exchange.auth import authenticate_bot
+from exchange.financial_idempotency import Replay, lookup_replay, prepare, store
 from exchange.config import get_session, settings
 from exchange.ratelimit import limiter
 from exchange.models import Account, Balance, Escrow, EvidenceSubmission, Transaction
@@ -583,98 +593,129 @@ def instant_settle(
     if current["id"] == req.provider_id:
         raise HTTPException(status_code=400, detail="Cannot settle to yourself")
 
+    reject_instant_settle_if_bound(session, current["id"])
+
     fee_amount = _fee_amount(req.amount)
     total_cost = req.amount + fee_amount
+    idem = prepare(request, session, current["id"], req.model_dump_json().encode())
+    if isinstance(idem, Replay):
+        return JSONResponse(status_code=idem.status_code, content=idem.body)
 
-    with session.begin():
-        requester_acct = session.execute(
-            _lock(select(Account).where(Account.id == current["id"]))
-        ).scalar_one_or_none()
-        if requester_acct is None:
-            raise HTTPException(status_code=404, detail="Requester account not found")
+    try:
+        with session.begin():
+            requester_acct = session.execute(
+                _lock(select(Account).where(Account.id == current["id"]))
+            ).scalar_one_or_none()
+            if requester_acct is None:
+                raise HTTPException(status_code=404, detail="Requester account not found")
 
-        if float(requester_acct.reputation) < settings.instant_settle_min_reputation:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Instant settlement requires a minimum reputation of "
-                    f"{settings.instant_settle_min_reputation:.2f}. "
-                    f"Current reputation: {float(requester_acct.reputation):.2f}. "
-                    "Build reputation through successful escrow transactions."
-                ),
-            )
+            if float(requester_acct.reputation) < settings.instant_settle_min_reputation:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Instant settlement requires a minimum reputation of "
+                        f"{settings.instant_settle_min_reputation:.2f}. "
+                        f"Current reputation: {float(requester_acct.reputation):.2f}. "
+                        "Build reputation through successful escrow transactions."
+                    ),
+                )
 
-        provider_acct = session.execute(
-            select(Account).where(Account.id == req.provider_id)
-        ).scalar_one_or_none()
-        if provider_acct is None:
-            raise HTTPException(status_code=404, detail="Provider account not found")
-        if provider_acct.status != "active":
-            raise HTTPException(status_code=400, detail="Provider account is not active")
+            provider_acct = session.execute(
+                select(Account).where(Account.id == req.provider_id)
+            ).scalar_one_or_none()
+            if provider_acct is None:
+                raise HTTPException(status_code=404, detail="Provider account not found")
+            if provider_acct.status != "active":
+                raise HTTPException(status_code=400, detail="Provider account is not active")
 
-        kya_gate = _check_kya_gate(session, current["id"], req.provider_id, req.amount)
-        if not kya_gate["allowed"]:
-            raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
+            kya_gate = _check_kya_gate(session, current["id"], req.provider_id, req.amount)
+            if not kya_gate["allowed"]:
+                raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
 
-        instant_sdc = classify_transaction(current["id"], req.provider_id, session)
+            instant_sdc = classify_transaction(current["id"], req.provider_id, session)
 
-        requester_bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == current["id"]))
-        ).scalar_one_or_none()
-        if requester_bal is None:
-            raise HTTPException(status_code=404, detail="Requester balance not found")
-        if requester_bal.available < total_cost:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient balance. Need {total_cost} ({req.amount} + {fee_amount} fee), have {requester_bal.available}",
-            )
+            requester_bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == current["id"]))
+            ).scalar_one_or_none()
+            if requester_bal is None:
+                raise HTTPException(status_code=404, detail="Requester balance not found")
+            if requester_bal.available < total_cost:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient balance. Need {total_cost} ({req.amount} + {fee_amount} fee), have {requester_bal.available}",
+                )
 
-        provider_bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == req.provider_id))
-        ).scalar_one_or_none()
-        if provider_bal is None:
-            raise HTTPException(status_code=404, detail="Provider balance not found")
+            provider_bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == req.provider_id))
+            ).scalar_one_or_none()
+            if provider_bal is None:
+                raise HTTPException(status_code=404, detail="Provider balance not found")
 
-        _check_spending_limits(session, current["id"], total_cost)
+            _check_spending_limits(session, current["id"], total_cost)
 
-        now = _now()
-        tx_id = str(uuid.uuid4())
+            now = _now()
+            tx_id = str(uuid.uuid4())
 
-        requester_bal.available -= total_cost
-        requester_bal.total_spent += total_cost
-        session.add(requester_bal)
+            requester_bal.available -= total_cost
+            requester_bal.total_spent += total_cost
+            session.add(requester_bal)
 
-        provider_bal.available += req.amount
-        provider_bal.total_earned += req.amount
-        session.add(provider_bal)
+            provider_bal.available += req.amount
+            provider_bal.total_earned += req.amount
+            session.add(provider_bal)
 
-        session.add(
-            Transaction(
-                id=tx_id,
-                escrow_id=None,
-                from_account=current["id"],
-                to_account=req.provider_id,
-                amount=req.amount,
-                tx_type="instant_settlement",
-                description=req.description or f"Instant settle: {req.task_type or req.task_id or 'unspecified'}",
-                self_dealing_class=instant_sdc,
-            )
-        )
-        if fee_amount > 0:
             session.add(
                 Transaction(
+                    id=tx_id,
                     escrow_id=None,
                     from_account=current["id"],
-                    to_account=None,
-                    amount=fee_amount,
-                    tx_type="fee",
-                    description="Platform fee (instant settlement)",
-                    fee_class=instant_sdc,
+                    to_account=req.provider_id,
+                    amount=req.amount,
+                    tx_type="instant_settlement",
+                    description=req.description or f"Instant settle: {req.task_type or req.task_id or 'unspecified'}",
+                    self_dealing_class=instant_sdc,
                 )
             )
+            if fee_amount > 0:
+                session.add(
+                    Transaction(
+                        escrow_id=None,
+                        from_account=current["id"],
+                        to_account=None,
+                        amount=fee_amount,
+                        tx_type="fee",
+                        description="Platform fee (instant settlement)",
+                        fee_class=instant_sdc,
+                    )
+                )
 
-        provider_acct.reputation = min(1.0, _guarded_ema_update(float(provider_acct.reputation), 1.0, instant_sdc))
-        session.add(provider_acct)
+            provider_acct.reputation = min(1.0, _guarded_ema_update(float(provider_acct.reputation), 1.0, instant_sdc))
+            session.add(provider_acct)
+            if idem is not None:
+                store(
+                    session,
+                    idem,
+                    200,
+                    {
+                        "transaction_id": tx_id,
+                        "requester_id": current["id"],
+                        "provider_id": req.provider_id,
+                        "amount": int(req.amount),
+                        "fee_amount": int(fee_amount),
+                        "effective_fee_percent": _effective_fee_percent(req.amount, fee_amount),
+                        "new_balance": int(requester_bal.available),
+                        "task_id": req.task_id,
+                        "settled_at": now.isoformat(),
+                    },
+                )
+    except IntegrityError:
+        session.rollback()
+        if idem is None:
+            raise
+        replay = lookup_replay(session, idem)
+        if replay is None:
+            raise
+        return JSONResponse(status_code=replay.status_code, content=replay.body)
 
     log_settlement_event(
         escrow_id=tx_id,
@@ -729,142 +770,189 @@ def create_escrow(
     ttl = req.ttl_minutes or settings.default_ttl_minutes
     expires_at = _now() + timedelta(minutes=ttl)
 
-    with session.begin():
-        _expire_stale_escrows(session)
+    idem = prepare(request, session, current["id"], req.model_dump_json().encode())
+    if isinstance(idem, Replay):
+        return JSONResponse(status_code=idem.status_code, content=idem.body)
 
-        bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == current["id"]))
-        ).scalar_one_or_none()
-        if bal is None:
-            raise HTTPException(status_code=404, detail="Requester account not found")
-        if bal.available < total_hold:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient balance. Need {total_hold} ({req.amount} + {fee_amount} fee), have {bal.available}",
-            )
+    try:
+        with session.begin():
+            _expire_stale_escrows(session)
 
-        _check_spending_limits(session, current["id"], total_hold)
-
-        provider = session.execute(
-            select(Account).where(Account.id == req.provider_id)
-        ).scalar_one_or_none()
-        if provider is None:
-            raise HTTPException(status_code=404, detail="Provider account not found")
-        if provider.status != "active":
-            raise HTTPException(
-                status_code=400, detail="Provider account is not active"
-            )
-
-        kya_gate = _check_kya_gate(session, current["id"], req.provider_id, req.amount)
-        if not kya_gate["allowed"]:
-            raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
-
-        bal.available -= total_hold
-        bal.held_in_escrow += total_hold
-        session.add(bal)
-
-        if req.depends_on:
-            deps = (
-                session.execute(
-                    select(Escrow).where(
-                        and_(
-                            Escrow.id.in_(req.depends_on),
-                            Escrow.requester_id == current["id"],
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if len(deps) != len(req.depends_on):
+            bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == current["id"]))
+            ).scalar_one_or_none()
+            if bal is None:
+                raise HTTPException(status_code=404, detail="Requester account not found")
+            if bal.available < total_hold:
                 raise HTTPException(
                     status_code=400,
-                    detail="One or more depends_on escrow IDs not found or not owned by requester",
+                    detail=f"Insufficient balance. Need {total_hold} ({req.amount} + {fee_amount} fee), have {bal.available}",
                 )
 
-        deliverables_json = (
-            [d.model_dump() for d in req.deliverables] if req.deliverables else None
-        )
+            _check_spending_limits(session, current["id"], total_hold)
 
-        if req.task_id:
-            existing = session.execute(
-                select(Escrow).where(
-                    and_(
-                        Escrow.requester_id == current["id"],
-                        Escrow.provider_id == req.provider_id,
-                        Escrow.task_id == req.task_id,
-                        Escrow.status == "held",
-                    )
-                )
+            provider = session.execute(
+                select(Account).where(Account.id == req.provider_id)
             ).scalar_one_or_none()
-            if existing:
+            if provider is None:
+                raise HTTPException(status_code=404, detail="Provider account not found")
+            if provider.status != "active":
                 raise HTTPException(
-                    status_code=409,
-                    detail=f"An active escrow already exists for this task_id (escrow_id={existing.id})",
+                    status_code=400, detail="Provider account is not active"
                 )
 
-        vi_chain_json = (
-            req.vi_credential_chain.model_dump(mode="json")
-            if req.vi_credential_chain
-            else None
-        )
+            kya_gate = _check_kya_gate(session, current["id"], req.provider_id, req.amount)
+            if not kya_gate["allowed"]:
+                raise HTTPException(status_code=403, detail=kya_gate["rejection_reason"])
 
-        escrow_sdc = classify_transaction(current["id"], req.provider_id, session)
+            bal.available -= total_hold
+            bal.held_in_escrow += total_hold
+            session.add(bal)
 
-        requester_acct = session.execute(
-            select(Account).where(Account.id == current["id"])
-        ).scalar_one()
-        trust_kwargs: dict = {}
-        trust_snap = None
-        if settings.trust_tier_shadow_enabled:
-            trust_snap = snapshot_trust_tiers(session, requester_acct, provider)
-            trust_kwargs = {
-                "requester_trust_state": trust_snap.requester_trust_state,
-                "provider_trust_state": trust_snap.provider_trust_state,
-                "requester_task_count": trust_snap.requester_task_count,
-                "requester_dispute_rate": trust_snap.requester_dispute_rate,
-                "trust_tier_shadow": True,
-            }
+            if req.depends_on:
+                deps = (
+                    session.execute(
+                        select(Escrow).where(
+                            and_(
+                                Escrow.id.in_(req.depends_on),
+                                Escrow.requester_id == current["id"],
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if len(deps) != len(req.depends_on):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="One or more depends_on escrow IDs not found or not owned by requester",
+                    )
 
-        escrow = Escrow(
-            requester_id=current["id"],
-            provider_id=req.provider_id,
-            amount=req.amount,
-            fee_amount=fee_amount,
-            task_id=req.task_id,
-            task_type=req.task_type,
-            group_id=req.group_id,
-            depends_on=req.depends_on,
-            deliverables=deliverables_json,
-            required_attestation_level=req.required_attestation_level,
-            vi_credential_chain=vi_chain_json,
-            status="held",
-            expires_at=expires_at,
-            requester_did=kya_gate["requester_did"],
-            provider_did=kya_gate["provider_did"],
-            kya_level_at_creation=kya_gate["required_level"],
-            hitl_required=kya_gate["hitl_required"],
-            self_dealing_class=escrow_sdc,
-            **trust_kwargs,
-        )
-        session.add(escrow)
-        session.flush()
-
-        if trust_snap is not None:
-            log_trust_tier_shadow(
-                escrow_id=escrow.id, amount=req.amount, snapshot=trust_snap
+            deliverables_json = (
+                [d.model_dump() for d in req.deliverables] if req.deliverables else None
             )
 
-        session.add(
-            Transaction(
-                escrow_id=escrow.id,
-                from_account=current["id"],
-                to_account=None,
-                amount=total_hold,
-                tx_type="escrow_hold",
-                description=f"Escrow for task: {req.task_type or req.task_id or 'unspecified'}",
+            if req.task_id:
+                existing = session.execute(
+                    select(Escrow).where(
+                        and_(
+                            Escrow.requester_id == current["id"],
+                            Escrow.provider_id == req.provider_id,
+                            Escrow.task_id == req.task_id,
+                            Escrow.status == "held",
+                        )
+                    )
+                ).scalar_one_or_none()
+                if existing:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"An active escrow already exists for this task_id (escrow_id={existing.id})",
+                    )
+
+            vi_chain_json = (
+                req.vi_credential_chain.model_dump(mode="json")
+                if req.vi_credential_chain
+                else None
             )
-        )
+
+            escrow_sdc = classify_transaction(current["id"], req.provider_id, session)
+
+            requester_acct = session.execute(
+                select(Account).where(Account.id == current["id"])
+            ).scalar_one()
+            trust_kwargs: dict = {}
+            trust_snap = None
+            if settings.trust_tier_shadow_enabled:
+                trust_snap = snapshot_trust_tiers(session, requester_acct, provider)
+                trust_kwargs = {
+                    "requester_trust_state": trust_snap.requester_trust_state,
+                    "provider_trust_state": trust_snap.provider_trust_state,
+                    "requester_task_count": trust_snap.requester_task_count,
+                    "requester_dispute_rate": trust_snap.requester_dispute_rate,
+                    "trust_tier_shadow": True,
+                }
+
+            policy_kwargs = stamp_escrow(
+                session,
+                requester_id=current["id"],
+                task_id=req.task_id,
+                group_id=req.group_id,
+                acceptance_required=req.acceptance_required,
+                root_budget_id=req.root_budget_id,
+                criteria_hash=req.criteria_hash,
+                obligation_policy_id=req.obligation_policy_id,
+                total_hold=total_hold,
+            )
+            escrow = Escrow(
+                requester_id=current["id"],
+                provider_id=req.provider_id,
+                amount=req.amount,
+                fee_amount=fee_amount,
+                task_id=policy_kwargs.get("task_id", req.task_id),
+                task_type=req.task_type,
+                group_id=policy_kwargs.get("group_id", req.group_id),
+                depends_on=req.depends_on,
+                deliverables=deliverables_json,
+                required_attestation_level=req.required_attestation_level,
+                vi_credential_chain=vi_chain_json,
+                status="held",
+                expires_at=expires_at,
+                requester_did=kya_gate["requester_did"],
+                provider_did=kya_gate["provider_did"],
+                kya_level_at_creation=kya_gate["required_level"],
+                hitl_required=kya_gate["hitl_required"],
+                self_dealing_class=escrow_sdc,
+                obligation_policy_id=policy_kwargs.get("obligation_policy_id"),
+                root_budget_id=policy_kwargs.get("root_budget_id"),
+                criteria_hash=policy_kwargs.get("criteria_hash"),
+                acceptance_required=policy_kwargs.get("acceptance_required", False),
+                **trust_kwargs,
+            )
+            session.add(escrow)
+            session.flush()
+
+            if trust_snap is not None:
+                log_trust_tier_shadow(
+                    escrow_id=escrow.id, amount=req.amount, snapshot=trust_snap
+                )
+
+            session.add(
+                Transaction(
+                    escrow_id=escrow.id,
+                    from_account=current["id"],
+                    to_account=None,
+                    amount=total_hold,
+                    tx_type="escrow_hold",
+                    description=f"Escrow for task: {req.task_type or req.task_id or 'unspecified'}",
+                )
+            )
+            if idem is not None:
+                store(
+                    session,
+                    idem,
+                    201,
+                    {
+                        "escrow_id": escrow.id,
+                        "requester_id": current["id"],
+                        "provider_id": req.provider_id,
+                        "amount": int(req.amount),
+                        "fee_amount": int(fee_amount),
+                        "effective_fee_percent": _effective_fee_percent(req.amount, fee_amount),
+                        "total_held": int(total_hold),
+                        "status": escrow.status,
+                        "expires_at": escrow.expires_at.isoformat(),
+                        "group_id": escrow.group_id,
+                    },
+                )
+
+    except IntegrityError:
+        session.rollback()
+        if idem is None:
+            raise
+        replay = lookup_replay(session, idem)
+        if replay is None:
+            raise
+        return JSONResponse(status_code=replay.status_code, content=replay.body)
 
     fire_webhook_event(session, escrow, "escrow.created")
     _notify_federation("notify_escrow_created", escrow)
@@ -936,6 +1024,7 @@ def deliver(
 
         now = _now()
         escrow.delivered_content = req.content
+        escrow.delivered_artifact_sha256 = artifact_sha256(req.content)
         prov_dict = req.provenance.model_dump(mode="json") if req.provenance else None
         escrow.provenance = prov_dict
         escrow.provenance_result = _verify_provenance(
@@ -995,110 +1084,142 @@ def partial_release(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> PartialReleaseResponse:
-    with session.begin():
-        _expire_stale_escrows(session)
+    idem = prepare(request, session, current["id"], req.model_dump_json().encode())
+    if isinstance(idem, Replay):
+        return JSONResponse(status_code=idem.status_code, content=idem.body)
+    try:
+        with session.begin():
+            _expire_stale_escrows(session)
 
-        escrow = session.execute(
-            _lock(select(Escrow).where(Escrow.id == escrow_id))
-        ).scalar_one_or_none()
-        if escrow is None:
-            raise HTTPException(status_code=404, detail="Escrow not found")
-        if escrow.requester_id != current["id"]:
-            raise HTTPException(
-                status_code=403, detail="Only the requester can partially release"
-            )
-        if escrow.status != "held":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Escrow cannot be partially released (status: {escrow.status})",
-            )
+            escrow = session.execute(
+                _lock(select(Escrow).where(Escrow.id == escrow_id))
+            ).scalar_one_or_none()
+            if escrow is None:
+                raise HTTPException(status_code=404, detail="Escrow not found")
+            if escrow.requester_id != current["id"]:
+                raise HTTPException(
+                    status_code=403, detail="Only the requester can partially release"
+                )
+            if escrow.status != "held":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Escrow cannot be partially released (status: {escrow.status})",
+                )
 
-        pct = req.release_percent
-        release_amount = int(escrow.amount) * pct // 100
-        release_fee = int(escrow.fee_amount) * pct // 100
-        holdback_amount = int(escrow.amount) - release_amount
-        holdback_fee = int(escrow.fee_amount) - release_fee
-        release_total = release_amount + release_fee
+            require_acceptance(session, escrow)
 
-        requester_bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
-        ).scalar_one_or_none()
-        provider_bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == escrow.provider_id))
-        ).scalar_one_or_none()
-        if requester_bal is None or provider_bal is None:
-            raise HTTPException(status_code=404, detail="Balance not found")
+            pct = req.release_percent
+            release_amount = int(escrow.amount) * pct // 100
+            release_fee = int(escrow.fee_amount) * pct // 100
+            holdback_amount = int(escrow.amount) - release_amount
+            holdback_fee = int(escrow.fee_amount) - release_fee
+            release_total = release_amount + release_fee
 
-        requester_bal.held_in_escrow -= release_total
-        requester_bal.total_spent += release_total
-        provider_bal.available += release_amount
-        provider_bal.total_earned += release_amount
-        session.add(requester_bal)
-        session.add(provider_bal)
+            requester_bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
+            ).scalar_one_or_none()
+            provider_bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == escrow.provider_id))
+            ).scalar_one_or_none()
+            if requester_bal is None or provider_bal is None:
+                raise HTTPException(status_code=404, detail="Balance not found")
 
-        escrow.released_amount = release_amount
-        escrow.released_fee = release_fee
-        escrow.holdback_amount = holdback_amount
-        escrow.holdback_fee = holdback_fee
-        escrow.score = req.score
+            requester_bal.held_in_escrow -= release_total
+            requester_bal.total_spent += release_total
+            provider_bal.available += release_amount
+            provider_bal.total_earned += release_amount
+            session.add(requester_bal)
+            session.add(provider_bal)
 
-        session.add(
-            Transaction(
-                escrow_id=escrow.id,
-                from_account=escrow.requester_id,
-                to_account=escrow.provider_id,
-                amount=release_amount,
-                tx_type="escrow_partial_release",
-                description=f"Partial release ({pct}%) - score {req.score or 'n/a'}",
-            )
-        )
-        if release_fee > 0:
+            escrow.released_amount = release_amount
+            escrow.released_fee = release_fee
+            escrow.holdback_amount = holdback_amount
+            escrow.holdback_fee = holdback_fee
+            escrow.score = req.score
+
             session.add(
                 Transaction(
                     escrow_id=escrow.id,
                     from_account=escrow.requester_id,
-                    to_account=None,
-                    amount=release_fee,
-                    tx_type="fee",
-                    description=f"Partial release fee ({pct}%)",
+                    to_account=escrow.provider_id,
+                    amount=release_amount,
+                    tx_type="escrow_partial_release",
+                    description=f"Partial release ({pct}%) - score {req.score or 'n/a'}",
                 )
             )
-
-        if req.efficacy_check_at:
-            escrow.status = "partially_released"
-            escrow.efficacy_check_at = req.efficacy_check_at
-            escrow.efficacy_criteria = req.efficacy_criteria
-        else:
-            holdback_total = holdback_amount + holdback_fee
-            requester_bal.available += holdback_total
-            requester_bal.held_in_escrow -= holdback_total
-            session.add(requester_bal)
-
-            session.add(
-                Transaction(
-                    escrow_id=escrow.id,
-                    from_account=None,
-                    to_account=escrow.requester_id,
-                    amount=holdback_total,
-                    tx_type="escrow_holdback_refund",
-                    description=f"Holdback refunded ({100 - pct}%) - no efficacy review",
+            if release_fee > 0:
+                session.add(
+                    Transaction(
+                        escrow_id=escrow.id,
+                        from_account=escrow.requester_id,
+                        to_account=None,
+                        amount=release_fee,
+                        tx_type="fee",
+                        description=f"Partial release fee ({pct}%)",
+                    )
                 )
-            )
 
-            escrow.status = "released"
-            escrow.resolved_at = _now()
+            commit_spend(session, escrow, release_total)
+            if req.efficacy_check_at:
+                escrow.status = "partially_released"
+                escrow.efficacy_check_at = req.efficacy_check_at
+                escrow.efficacy_criteria = req.efficacy_criteria
+            else:
+                holdback_total = holdback_amount + holdback_fee
+                requester_bal.available += holdback_total
+                requester_bal.held_in_escrow -= holdback_total
+                session.add(requester_bal)
 
-        session.add(escrow)
+                session.add(
+                    Transaction(
+                        escrow_id=escrow.id,
+                        from_account=None,
+                        to_account=escrow.requester_id,
+                        amount=holdback_total,
+                        tx_type="escrow_holdback_refund",
+                        description=f"Holdback refunded ({100 - pct}%) - no efficacy review",
+                    )
+                )
 
-        provider = session.execute(
-            select(Account).where(Account.id == escrow.provider_id)
-        ).scalar_one_or_none()
-        if provider is not None:
-            boost = (pct / 100.0) * 0.1
-            provider.reputation = min(
-                1.0, _guarded_ema_update(float(provider.reputation), 1.0, escrow.self_dealing_class, lam=boost)
-            )
-            session.add(provider)
+                escrow.status = "released"
+                escrow.resolved_at = _now()
+                release_reservation(session, escrow, holdback_total)
+
+            session.add(escrow)
+
+            provider = session.execute(
+                select(Account).where(Account.id == escrow.provider_id)
+            ).scalar_one_or_none()
+            if provider is not None:
+                boost = (pct / 100.0) * 0.1
+                provider.reputation = min(
+                    1.0, _guarded_ema_update(float(provider.reputation), 1.0, escrow.self_dealing_class, lam=boost)
+                )
+                session.add(provider)
+
+            if idem is not None:
+                store(
+                    session,
+                    idem,
+                    200,
+                    {
+                        "escrow_id": escrow.id,
+                        "status": escrow.status,
+                        "released_amount": release_amount,
+                        "fee_collected": release_fee,
+                        "holdback_amount": holdback_amount if escrow.status == "partially_released" else 0,
+                        "holdback_fee": holdback_fee if escrow.status == "partially_released" else 0,
+                        "provider_id": escrow.provider_id,
+                    },
+                )
+    except IntegrityError:
+        session.rollback()
+        if idem is None:
+            raise
+        replay = lookup_replay(session, idem)
+        if replay is None:
+            raise
+        return JSONResponse(status_code=replay.status_code, content=replay.body)
 
     fire_webhook_event(session, escrow, "escrow.partial_release")
     log_settlement_event(
@@ -1136,117 +1257,147 @@ def release(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> ReleaseResponse:
-    with session.begin():
-        _expire_stale_escrows(session)
+    idem = prepare(request, session, current["id"], req.model_dump_json().encode())
+    if isinstance(idem, Replay):
+        return JSONResponse(status_code=idem.status_code, content=idem.body)
+    try:
+        with session.begin():
+            _expire_stale_escrows(session)
 
-        escrow = session.execute(
-            _lock(select(Escrow).where(Escrow.id == req.escrow_id))
-        ).scalar_one_or_none()
-        if escrow is None:
-            raise HTTPException(status_code=404, detail="Escrow not found")
-        if escrow.requester_id != current["id"]:
-            raise HTTPException(
-                status_code=403, detail="Only the requester can release an escrow"
-            )
-        if escrow.status not in ("held", "partially_released"):
-            raise HTTPException(
-                status_code=400, detail=f"Escrow is already {escrow.status}"
-            )
+            escrow = session.execute(
+                _lock(select(Escrow).where(Escrow.id == req.escrow_id))
+            ).scalar_one_or_none()
+            if escrow is None:
+                raise HTTPException(status_code=404, detail="Escrow not found")
+            if escrow.requester_id != current["id"]:
+                raise HTTPException(
+                    status_code=403, detail="Only the requester can release an escrow"
+                )
+            if escrow.status not in ("held", "partially_released"):
+                raise HTTPException(
+                    status_code=400, detail=f"Escrow is already {escrow.status}"
+                )
 
-        is_holdback = escrow.status == "partially_released"
+            require_acceptance(session, escrow)
 
-        if not is_holdback and escrow.depends_on:
-            unresolved = (
-                session.execute(
-                    select(Escrow).where(
-                        and_(
-                            Escrow.id.in_(escrow.depends_on),
-                            Escrow.status != "released",
+            is_holdback = escrow.status == "partially_released"
+
+            if not is_holdback and escrow.depends_on:
+                unresolved = (
+                    session.execute(
+                        select(Escrow).where(
+                            and_(
+                                Escrow.id.in_(escrow.depends_on),
+                                Escrow.status != "released",
+                            )
                         )
                     )
+                    .scalars()
+                    .all()
                 )
-                .scalars()
-                .all()
+                if unresolved:
+                    ids = [e.id for e in unresolved]
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Cannot release: upstream escrows not yet released: {ids}",
+                    )
+
+            if is_holdback:
+                pay_amount = int(escrow.holdback_amount or 0)
+                pay_fee = int(escrow.holdback_fee or 0)
+            else:
+                pay_amount = int(escrow.amount)
+                pay_fee = int(escrow.fee_amount)
+            total_held = pay_amount + pay_fee
+
+            requester_bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
+            ).scalar_one_or_none()
+            provider_bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == escrow.provider_id))
+            ).scalar_one_or_none()
+            if requester_bal is None or provider_bal is None:
+                raise HTTPException(status_code=404, detail="Balance not found")
+
+            requester_bal.held_in_escrow -= total_held
+            requester_bal.total_spent += total_held
+            session.add(requester_bal)
+
+            provider_bal.available += pay_amount
+            provider_bal.total_earned += pay_amount
+            session.add(provider_bal)
+
+            escrow.status = "released"
+            escrow.resolved_at = _now()
+            if is_holdback:
+                escrow.holdback_amount = 0
+                escrow.holdback_fee = 0
+            commit_spend(session, escrow, total_held)
+            session.add(escrow)
+
+            tx_type = "escrow_holdback_release" if is_holdback else "escrow_release"
+            tx_desc = (
+                "Holdback released - efficacy approved"
+                if is_holdback
+                else "Task completed - payment released"
             )
-            if unresolved:
-                ids = [e.id for e in unresolved]
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Cannot release: upstream escrows not yet released: {ids}",
-                )
 
-        if is_holdback:
-            pay_amount = int(escrow.holdback_amount or 0)
-            pay_fee = int(escrow.holdback_fee or 0)
-        else:
-            pay_amount = int(escrow.amount)
-            pay_fee = int(escrow.fee_amount)
-        total_held = pay_amount + pay_fee
-
-        requester_bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
-        ).scalar_one_or_none()
-        provider_bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == escrow.provider_id))
-        ).scalar_one_or_none()
-        if requester_bal is None or provider_bal is None:
-            raise HTTPException(status_code=404, detail="Balance not found")
-
-        requester_bal.held_in_escrow -= total_held
-        requester_bal.total_spent += total_held
-        session.add(requester_bal)
-
-        provider_bal.available += pay_amount
-        provider_bal.total_earned += pay_amount
-        session.add(provider_bal)
-
-        escrow.status = "released"
-        escrow.resolved_at = _now()
-        if is_holdback:
-            escrow.holdback_amount = 0
-            escrow.holdback_fee = 0
-        session.add(escrow)
-
-        tx_type = "escrow_holdback_release" if is_holdback else "escrow_release"
-        tx_desc = (
-            "Holdback released - efficacy approved"
-            if is_holdback
-            else "Task completed - payment released"
-        )
-
-        session.add(
-            Transaction(
-                escrow_id=escrow.id,
-                from_account=escrow.requester_id,
-                to_account=escrow.provider_id,
-                amount=pay_amount,
-                tx_type=tx_type,
-                description=tx_desc,
-                self_dealing_class=escrow.self_dealing_class,
-            )
-        )
-        if pay_fee > 0:
             session.add(
                 Transaction(
                     escrow_id=escrow.id,
                     from_account=escrow.requester_id,
-                    to_account=None,
-                    amount=pay_fee,
-                    tx_type="fee",
-                    description="Platform transaction fee"
-                    + (" (holdback)" if is_holdback else ""),
-                    fee_class=escrow.self_dealing_class,
+                    to_account=escrow.provider_id,
+                    amount=pay_amount,
+                    tx_type=tx_type,
+                    description=tx_desc,
+                    self_dealing_class=escrow.self_dealing_class,
                 )
             )
+            if pay_fee > 0:
+                session.add(
+                    Transaction(
+                        escrow_id=escrow.id,
+                        from_account=escrow.requester_id,
+                        to_account=None,
+                        amount=pay_fee,
+                        tx_type="fee",
+                        description="Platform transaction fee"
+                        + (" (holdback)" if is_holdback else ""),
+                        fee_class=escrow.self_dealing_class,
+                    )
+                )
 
-        provider = session.execute(
-            select(Account).where(Account.id == escrow.provider_id)
-        ).scalar_one_or_none()
-        if provider is not None:
-            provider.reputation = min(
-                1.0, _guarded_ema_update(float(provider.reputation), 1.0, escrow.self_dealing_class)
-            )
-            session.add(provider)
+            provider = session.execute(
+                select(Account).where(Account.id == escrow.provider_id)
+            ).scalar_one_or_none()
+            if provider is not None:
+                provider.reputation = min(
+                    1.0, _guarded_ema_update(float(provider.reputation), 1.0, escrow.self_dealing_class)
+                )
+                session.add(provider)
+
+            if idem is not None:
+                store(
+                    session,
+                    idem,
+                    200,
+                    {
+                        "escrow_id": req.escrow_id,
+                        "status": "released",
+                        "amount_paid": pay_amount,
+                        "fee_collected": pay_fee,
+                        "provider_id": escrow.provider_id,
+                    },
+                )
+
+    except IntegrityError:
+        session.rollback()
+        if idem is None:
+            raise
+        replay = lookup_replay(session, idem)
+        if replay is None:
+            raise
+        return JSONResponse(status_code=replay.status_code, content=replay.body)
 
     fire_webhook_event(session, escrow, "escrow.released")
     _notify_federation(
@@ -1286,81 +1437,108 @@ def refund(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> RefundResponse:
-    with session.begin():
-        _expire_stale_escrows(session)
+    idem = prepare(request, session, current["id"], req.model_dump_json().encode())
+    if isinstance(idem, Replay):
+        return JSONResponse(status_code=idem.status_code, content=idem.body)
+    try:
+        with session.begin():
+            _expire_stale_escrows(session)
 
-        escrow = session.execute(
-            _lock(select(Escrow).where(Escrow.id == req.escrow_id))
-        ).scalar_one_or_none()
-        if escrow is None:
-            raise HTTPException(status_code=404, detail="Escrow not found")
-        if escrow.requester_id != current["id"]:
-            raise HTTPException(
-                status_code=403, detail="Only the requester can refund an escrow"
+            escrow = session.execute(
+                _lock(select(Escrow).where(Escrow.id == req.escrow_id))
+            ).scalar_one_or_none()
+            if escrow is None:
+                raise HTTPException(status_code=404, detail="Escrow not found")
+            if escrow.requester_id != current["id"]:
+                raise HTTPException(
+                    status_code=403, detail="Only the requester can refund an escrow"
+                )
+            if escrow.status not in ("held", "partially_released"):
+                raise HTTPException(
+                    status_code=400, detail=f"Escrow is already {escrow.status}"
+                )
+
+            is_holdback = escrow.status == "partially_released"
+
+            if is_holdback:
+                refund_total = int(escrow.holdback_amount or 0) + int(
+                    escrow.holdback_fee or 0
+                )
+            else:
+                refund_total = int(escrow.amount + escrow.fee_amount)
+
+            requester_bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
+            ).scalar_one_or_none()
+            if requester_bal is None:
+                raise HTTPException(status_code=404, detail="Requester balance not found")
+
+            requester_bal.available += refund_total
+            requester_bal.held_in_escrow -= refund_total
+            session.add(requester_bal)
+
+            if is_holdback:
+                escrow.status = "released"
+                escrow.holdback_amount = 0
+                escrow.holdback_fee = 0
+            else:
+                escrow.status = "refunded"
+            release_reservation(session, escrow, refund_total)
+            escrow.resolved_at = _now()
+            session.add(escrow)
+
+            tx_type = "escrow_holdback_refund" if is_holdback else "escrow_refund"
+            tx_desc = req.reason or (
+                "Holdback refunded - efficacy not met"
+                if is_holdback
+                else "Task failed or cancelled"
             )
-        if escrow.status not in ("held", "partially_released"):
-            raise HTTPException(
-                status_code=400, detail=f"Escrow is already {escrow.status}"
+
+            session.add(
+                Transaction(
+                    escrow_id=escrow.id,
+                    from_account=None,
+                    to_account=escrow.requester_id,
+                    amount=refund_total,
+                    tx_type=tx_type,
+                    description=tx_desc,
+                    self_dealing_class=escrow.self_dealing_class,
+                )
             )
 
-        is_holdback = escrow.status == "partially_released"
+            provider = session.execute(
+                select(Account).where(Account.id == escrow.provider_id)
+            ).scalar_one_or_none()
+            if provider is not None and escrow.delivered_at is not None:
+                provider.reputation = max(
+                    0.0, _guarded_ema_update(float(provider.reputation), 0.0, escrow.self_dealing_class)
+                )
+                session.add(provider)
 
-        if is_holdback:
-            refund_total = int(escrow.holdback_amount or 0) + int(
-                escrow.holdback_fee or 0
-            )
-        else:
-            refund_total = int(escrow.amount + escrow.fee_amount)
+            if not is_holdback:
+                _auto_refund_dependents(session, escrow.id)
 
-        requester_bal = session.execute(
-            _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
-        ).scalar_one_or_none()
-        if requester_bal is None:
-            raise HTTPException(status_code=404, detail="Requester balance not found")
+            if idem is not None:
+                store(
+                    session,
+                    idem,
+                    200,
+                    {
+                        "escrow_id": req.escrow_id,
+                        "status": escrow.status,
+                        "amount_returned": refund_total,
+                        "requester_id": escrow.requester_id,
+                    },
+                )
 
-        requester_bal.available += refund_total
-        requester_bal.held_in_escrow -= refund_total
-        session.add(requester_bal)
-
-        if is_holdback:
-            escrow.status = "released"
-            escrow.holdback_amount = 0
-            escrow.holdback_fee = 0
-        else:
-            escrow.status = "refunded"
-        escrow.resolved_at = _now()
-        session.add(escrow)
-
-        tx_type = "escrow_holdback_refund" if is_holdback else "escrow_refund"
-        tx_desc = req.reason or (
-            "Holdback refunded - efficacy not met"
-            if is_holdback
-            else "Task failed or cancelled"
-        )
-
-        session.add(
-            Transaction(
-                escrow_id=escrow.id,
-                from_account=None,
-                to_account=escrow.requester_id,
-                amount=refund_total,
-                tx_type=tx_type,
-                description=tx_desc,
-                self_dealing_class=escrow.self_dealing_class,
-            )
-        )
-
-        provider = session.execute(
-            select(Account).where(Account.id == escrow.provider_id)
-        ).scalar_one_or_none()
-        if provider is not None and escrow.delivered_at is not None:
-            provider.reputation = max(
-                0.0, _guarded_ema_update(float(provider.reputation), 0.0, escrow.self_dealing_class)
-            )
-            session.add(provider)
-
-        if not is_holdback:
-            _auto_refund_dependents(session, escrow.id)
+    except IntegrityError:
+        session.rollback()
+        if idem is None:
+            raise
+        replay = lookup_replay(session, idem)
+        if replay is None:
+            raise
+        return JSONResponse(status_code=replay.status_code, content=replay.body)
 
     event_type = "escrow.released" if is_holdback else "escrow.refunded"
     fire_webhook_event(session, escrow, event_type)
@@ -1529,6 +1707,7 @@ def resolve(
         _settle_dispute_stake(session, escrow, req.stake_ruling)
 
         if req.resolution == "release":
+            require_acceptance(session, escrow)
             requester_bal = session.execute(
                 _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
             ).scalar_one_or_none()
@@ -1548,6 +1727,7 @@ def resolve(
 
             escrow.status = "released"
             escrow.resolved_at = _now()
+            commit_spend(session, escrow, total_held)
             session.add(escrow)
 
             session.add(
@@ -1596,6 +1776,7 @@ def resolve(
             requester_bal.available += total_held
             requester_bal.held_in_escrow -= total_held
             session.add(requester_bal)
+            release_reservation(session, escrow, total_held)
 
             escrow.status = "refunded"
             escrow.resolved_at = _now()

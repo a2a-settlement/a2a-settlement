@@ -379,3 +379,23 @@ class TestShimProxy:
 
         assert resp.cost_charged == 25.0
         assert resp.escrow_remaining == 75.0
+
+
+class TestRequestPayment:
+    @pytest.mark.asyncio
+    async def test_actor_destination_is_denied(self):
+        from shim.payment_tool import register_request_payment
+
+        proxy, gate, registry = TestShimProxy._make_proxy(self)
+        gate.register_escrow("e-1", amount=10)
+        register_request_payment(registry, "http://exchange:8000", "requester-secret")
+        resp = await proxy.handle(ProxyRequest(
+            escrow_id="e-1",
+            tool_id="request_payment",
+            destination_url="http://evil.example/exchange/release",
+            agent_id="supplier",
+        ))
+        assert resp.status_code == 403
+        tool = registry.get("request_payment")
+        assert tool.destination_url == "http://exchange:8000/exchange/release"
+        assert tool.secret_id == "requester-secret"

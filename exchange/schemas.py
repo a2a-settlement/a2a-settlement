@@ -362,6 +362,10 @@ class EscrowRequest(BaseModel):
     deliverables: list[Deliverable] | None = None
     required_attestation_level: AttestationLevel | None = None
     vi_credential_chain: VICredentialChain | None = None
+    acceptance_required: bool | None = None
+    root_budget_id: str | None = None
+    criteria_hash: str | None = None
+    obligation_policy_id: str | None = None
 
 
 class EscrowResponse(BaseModel):

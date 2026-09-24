@@ -46,6 +46,8 @@ class ProxyRequest:
 
     agent_id: Optional[str] = None
     org_id: Optional[str] = None
+    escrow_amount: Optional[float] = None
+    counterparty_allowed: Optional[bool] = None
 
 
 @dataclass
