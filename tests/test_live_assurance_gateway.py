@@ -18,7 +18,10 @@ from tests.test_acceptance_binding import TASK, _bootstrap, _register
 _configured = os.environ.get("SETTLEBRIDGE_ASSURANCE_ROOT", "")
 ASSURANCE_ROOT = Path(_configured) if _configured else Path(__file__).resolve().parents[2] / "settlebridge-ai" / "assurance"
 if not ASSURANCE_ROOT.is_dir():
-    raise RuntimeError("Set SETTLEBRIDGE_ASSURANCE_ROOT to the assurance package checkout")
+    pytest.skip(
+        "Set SETTLEBRIDGE_ASSURANCE_ROOT to the assurance package checkout",
+        allow_module_level=True,
+    )
 sys.path.insert(0, str(ASSURANCE_ROOT))
 
 from assurance.actors.scripted import ScriptedActor, premature_payment_actor  # noqa: E402
