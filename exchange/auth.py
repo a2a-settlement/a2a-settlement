@@ -8,9 +8,14 @@ import bcrypt
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from exchange.config import get_session, settings
 from exchange.models import Account
+
+# Optional request header naming the caller's account, so only that account's
+# key hash is checked instead of every account's.
+ACCOUNT_ID_HEADER = "X-A2A-Account-Id"
 
 
 def _check_api_key(api_key: str, api_key_hash: str) -> bool:
@@ -78,27 +83,37 @@ async def authenticate_bot(
         ):
             raise HTTPException(status_code=401, detail="Invalid request signature")
 
+    account_hint = request.headers.get(ACCOUNT_ID_HEADER)
+    if account_hint is not None:
+        account_hint = account_hint.strip()
+        if not account_hint:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # bcrypt is CPU-bound; running it on the event loop would stall every
+    # request this worker is serving.
+    account = await run_in_threadpool(_find_account, session, api_key, account_hint)
+    if account is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return account
+
+
+def _find_account(session: Session, api_key: str, account_id: str | None) -> dict | None:
+    """Return the active or operator account whose key matches.
+
+    With ``account_id`` only that account's hashes are checked. Without it,
+    every active and operator account is checked in turn, one bcrypt
+    comparison each.
+    """
+    stmt = select(Account).where(Account.status.in_(("active", "operator")))
+    if account_id is not None:
+        stmt = stmt.where(Account.id == account_id)
     with session.begin():
-        accounts = (
-            session.execute(
-                select(Account).where(Account.status.in_(("active", "operator")))
-            )
-            .scalars()
-            .all()
-        )
+        accounts = session.execute(stmt).scalars().all()
         now = datetime.now(timezone.utc)
         grace = timedelta(minutes=settings.key_rotation_grace_minutes)
 
         for acct in accounts:
-            if _check_api_key(api_key, acct.api_key_hash):
-                return {
-                    "id": acct.id,
-                    "bot_name": acct.bot_name,
-                    "developer_id": acct.developer_id,
-                    "status": acct.status,
-                    "account_type": getattr(acct, "account_type", "agent"),
-                }
-            if (
+            if _check_api_key(api_key, acct.api_key_hash) or (
                 acct.previous_api_key_hash
                 and acct.key_rotated_at
                 and (now - acct.key_rotated_at) < grace
@@ -111,8 +126,7 @@ async def authenticate_bot(
                     "status": acct.status,
                     "account_type": getattr(acct, "account_type", "agent"),
                 }
-
-    raise HTTPException(status_code=401, detail="Invalid API key")
+    return None
 
 
 async def authenticate_bot_optional(
