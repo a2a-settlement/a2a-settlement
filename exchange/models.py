@@ -325,6 +325,12 @@ class Escrow(Base):
     )
     delivered_artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Only the creating workflow can cancel. The exchange stores the hash, never the secret.
+    workflow_locked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    cancel_secret_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     __table_args__ = (
         Index(
             "uq_active_task_escrow",

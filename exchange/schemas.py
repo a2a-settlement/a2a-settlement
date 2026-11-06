@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Error ---
@@ -351,6 +351,10 @@ class AttestationListResponse(BaseModel):
 # --- Settlement ---
 
 
+def _is_lowercase_sha256(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
 class EscrowRequest(BaseModel):
     provider_id: str
     amount: int
@@ -366,6 +370,20 @@ class EscrowRequest(BaseModel):
     root_budget_id: str | None = None
     criteria_hash: str | None = None
     obligation_policy_id: str | None = None
+    workflow_locked: bool | None = None
+    cancel_secret_hash: str | None = None
+
+    @model_validator(mode="after")
+    def _workflow_lock_requires_hash(self):
+        locked = self.workflow_locked is True
+        digest = self.cancel_secret_hash
+        if digest is not None and not _is_lowercase_sha256(digest):
+            raise ValueError("cancel_secret_hash must be 64 lowercase hex characters")
+        if locked and digest is None:
+            raise ValueError("workflow_locked requires cancel_secret_hash")
+        if digest is not None and not locked:
+            raise ValueError("cancel_secret_hash requires workflow_locked true")
+        return self
 
 
 class EscrowResponse(BaseModel):
@@ -396,6 +414,7 @@ class ReleaseResponse(BaseModel):
 class RefundRequest(BaseModel):
     escrow_id: str
     reason: str | None = None
+    cancel_secret: str | None = None
 
 
 class RefundResponse(BaseModel):
@@ -629,6 +648,7 @@ class EscrowDetailResponse(BaseModel):
     efficacy_check_at: datetime | None = None
     efficacy_criteria: str | None = None
     vi_credential_chain: dict | None = None
+    workflow_locked: bool = False
     created_at: datetime | None = None
     resolved_at: datetime | None = None
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json as _json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -45,7 +46,6 @@ from exchange.schemas import (
     EvidenceSubmissionResponse,
     InstantSettleRequest,
     InstantSettleResponse,
-    MAX_INLINE_EVIDENCE_BYTES,
     OracleEvidenceSubmissionResponse,
     PartialReleaseRequest,
     PartialReleaseResponse,
@@ -202,6 +202,7 @@ def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
         efficacy_check_at=escrow.efficacy_check_at,
         efficacy_criteria=escrow.efficacy_criteria,
         vi_credential_chain=escrow.vi_credential_chain,
+        workflow_locked=bool(escrow.workflow_locked),
         created_at=escrow.created_at,
         resolved_at=escrow.resolved_at,
     )
@@ -224,6 +225,8 @@ def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
     )
     for dep in dependents:
         if dep.depends_on and upstream_escrow_id in dep.depends_on:
+            if dep.workflow_locked:
+                continue
             dep_total = int(dep.amount + dep.fee_amount)
             bal = session.execute(
                 _lock(select(Balance).where(Balance.account_id == dep.requester_id))
@@ -247,6 +250,24 @@ def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
                 )
             )
             _auto_refund_dependents(session, dep.id)
+
+
+_WORKFLOW_LOCKED_DETAIL = "escrow is workflow locked"
+
+
+def _require_workflow_cancel_secret(escrow: Escrow, cancel_secret: str | None) -> None:
+    """Refund a workflow-locked escrow only when the cancel secret matches.
+
+    Unlocked escrows ignore ``cancel_secret``. The plaintext is never stored or logged.
+    """
+    if not escrow.workflow_locked:
+        return
+    stored = escrow.cancel_secret_hash
+    if not cancel_secret or not stored:
+        raise HTTPException(status_code=409, detail=_WORKFLOW_LOCKED_DETAIL)
+    digest = hashlib.sha256(cancel_secret.encode()).hexdigest()
+    if len(digest) != len(stored) or not hmac.compare_digest(digest, stored):
+        raise HTTPException(status_code=409, detail=_WORKFLOW_LOCKED_DETAIL)
 
 
 def _verify_provenance(
@@ -906,6 +927,10 @@ def create_escrow(
                 root_budget_id=policy_kwargs.get("root_budget_id"),
                 criteria_hash=policy_kwargs.get("criteria_hash"),
                 acceptance_required=policy_kwargs.get("acceptance_required", False),
+                workflow_locked=req.workflow_locked is True,
+                cancel_secret_hash=(
+                    req.cancel_secret_hash if req.workflow_locked is True else None
+                ),
                 **trust_kwargs,
             )
             session.add(escrow)
@@ -1105,6 +1130,8 @@ def partial_release(
                     status_code=400,
                     detail=f"Escrow cannot be partially released (status: {escrow.status})",
                 )
+            if escrow.workflow_locked:
+                raise HTTPException(status_code=409, detail=_WORKFLOW_LOCKED_DETAIL)
 
             require_acceptance(session, escrow)
 
@@ -1458,6 +1485,8 @@ def refund(
                     status_code=400, detail=f"Escrow is already {escrow.status}"
                 )
 
+            _require_workflow_cancel_secret(escrow, req.cancel_secret)
+
             is_holdback = escrow.status == "partially_released"
 
             if is_holdback:
@@ -1601,6 +1630,8 @@ def dispute(
                 status_code=400,
                 detail=f"Escrow cannot be disputed (status: {escrow.status})",
             )
+        if escrow.workflow_locked and current["id"] == escrow.requester_id:
+            raise HTTPException(status_code=409, detail=_WORKFLOW_LOCKED_DETAIL)
 
         disputer_bal = session.execute(
             _lock(select(Balance).where(Balance.account_id == current["id"]))
