@@ -224,6 +224,8 @@ class SettlementExchangeClient:
         depends_on: list[str] | None = None,
         deliverables: list[dict[str, Any]] | None = None,
         required_attestation_level: str | None = None,
+        workflow_locked: bool | None = None,
+        cancel_secret_hash: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/escrow")
@@ -242,6 +244,10 @@ class SettlementExchangeClient:
             payload["deliverables"] = deliverables
         if required_attestation_level is not None:
             payload["required_attestation_level"] = required_attestation_level
+        if workflow_locked is not None:
+            payload["workflow_locked"] = workflow_locked
+        if cancel_secret_hash is not None:
+            payload["cancel_secret_hash"] = cancel_secret_hash
         return self._post(url, payload, idempotency_key=idempotency_key)
 
     def deliver(
@@ -294,12 +300,15 @@ class SettlementExchangeClient:
         *,
         escrow_id: str,
         reason: str | None = None,
+        cancel_secret: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         url = _join(self.base_url, "/v1/exchange/refund")
         payload: dict[str, Any] = {"escrow_id": escrow_id}
         if reason is not None:
             payload["reason"] = reason
+        if cancel_secret is not None:
+            payload["cancel_secret"] = cancel_secret
         return self._post(url, payload, idempotency_key=idempotency_key)
 
     def dispute_escrow(

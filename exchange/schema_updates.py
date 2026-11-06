@@ -18,6 +18,8 @@ _ESCROW_COLUMNS = {
     "criteria_hash": "VARCHAR(64)",
     "acceptance_required": "BOOLEAN NOT NULL DEFAULT FALSE",
     "delivered_artifact_sha256": "VARCHAR(64)",
+    "workflow_locked": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "cancel_secret_hash": "VARCHAR(64)",
 }
 
 

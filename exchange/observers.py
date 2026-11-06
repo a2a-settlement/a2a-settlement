@@ -70,6 +70,8 @@ class PaymentTimeoutObserver:
         )
         expired: list[Escrow] = []
         for escrow in stale:
+            if escrow.workflow_locked:
+                continue
             _refund_escrow(session, escrow, now, "Auto-expired: TTL exceeded")
             expired.append(escrow)
         return expired
@@ -120,6 +122,8 @@ class PaymentTimeoutObserver:
         )
         warned: list[Escrow] = []
         for escrow in approaching:
+            if escrow.workflow_locked:
+                continue
             escrow.warning_sent_at = now
             session.add(escrow)
             warned.append(escrow)
