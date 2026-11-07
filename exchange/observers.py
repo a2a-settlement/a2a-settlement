@@ -240,13 +240,18 @@ class PaymentTimeoutObserver:
                     claimed = self._release_escrow(session, escrow, now)
                 if not claimed:
                     continue
-                # Missing-balance path never claimed a terminal status.
+                # Missing-balance path: no money moved, so the hold is released.
                 if escrow.status == "evidence_pending":
-                    escrow.status = (
+                    terminal = (
                         "refunded" if respondent == escrow.provider_id else "released"
                     )
-                    escrow.resolved_at = now
-                    session.add(escrow)
+                    if not _claim_terminal_status(
+                        session, escrow, "evidence_pending", terminal, now
+                    ):
+                        continue
+                    release_reservation(
+                        session, escrow, int(escrow.amount + escrow.fee_amount)
+                    )
                 defaulted.append(escrow)
             else:
                 escrow.status = "disputed"

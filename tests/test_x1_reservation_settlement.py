@@ -317,6 +317,55 @@ def test_default_judgment_release_commits_spend_once(exchange_app, auth_header):
         assert _statuses(_attestations(client, eid)).count("released") == 1
 
 
+def test_default_release_with_missing_balance_releases_the_hold_once(
+    exchange_app, auth_header
+):
+    with TestClient(exchange_app) as client:
+        ctx = _bootstrap(
+            client, auth_header, acceptance_required=False, limit_units=HOLD
+        )
+        created = _open(
+            client,
+            auth_header,
+            ctx,
+            ctx["provider"]["account"]["id"],
+            "hold-dj-missing-balance",
+        )
+        eid = created["escrow_id"]
+        key = ctx["requester"]["api_key"]
+        _dispute(client, auth_header, ctx["provider"]["api_key"], eid)
+
+        from sqlalchemy import delete
+
+        from exchange.config import SessionLocal
+        from exchange.models import Balance
+
+        session = SessionLocal()
+        try:
+            with session.begin():
+                session.execute(
+                    delete(Balance).where(
+                        Balance.account_id == ctx["provider"]["account"]["id"]
+                    )
+                )
+        finally:
+            session.close()
+
+        moment = datetime.now(timezone.utc) + PAST_EVIDENCE
+        first = _sweep(moment)
+        second = _sweep(moment)
+
+        assert first["defaulted_evidence"] == 1
+        assert second["defaulted_evidence"] == 0
+        assert _detail(client, auth_header, key, eid)["status"] == "released"
+        assert _budget(client, auth_header, key, ctx["root_budget_id"]) == (0, 0)
+        assert [
+            tx
+            for tx in _txns(client, auth_header, key)
+            if tx["type"] == "escrow_release"
+        ] == []
+
+
 def test_expiry_of_one_hold_leaves_the_other_reservation(exchange_app, auth_header):
     """reserved_units drops by amount + fee and never crosses zero."""
     with TestClient(exchange_app) as client:
