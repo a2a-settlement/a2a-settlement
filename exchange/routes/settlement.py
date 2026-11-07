@@ -212,6 +212,27 @@ def _lock(stmt):
     return stmt.with_for_update()
 
 
+def _claim_held_refund(session: Session, escrow: Escrow) -> bool:
+    """Claim a held dependent. SQLite ignores FOR UPDATE, so status is the gate.
+
+    Refresh keeps the identity map from flushing the pre-claim status back.
+    A second identical write changes zero rows on SQLite and aborts the session.
+    """
+    from sqlalchemy import update
+
+    now = _now()
+    result = session.execute(
+        update(Escrow)
+        .where(Escrow.id == escrow.id, Escrow.status == "held")
+        .values(status="refunded", resolved_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        return False
+    session.refresh(escrow)
+    return True
+
+
 def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
     """Auto-refund any held escrows that depend on the given (now-refunded) escrow."""
     dependents = (
@@ -224,32 +245,42 @@ def _auto_refund_dependents(session: Session, upstream_escrow_id: str) -> None:
         .all()
     )
     for dep in dependents:
-        if dep.depends_on and upstream_escrow_id in dep.depends_on:
-            if dep.workflow_locked:
-                continue
-            dep_total = int(dep.amount + dep.fee_amount)
-            bal = session.execute(
-                _lock(select(Balance).where(Balance.account_id == dep.requester_id))
-            ).scalar_one_or_none()
-            if bal is None:
-                continue
-            bal.available += dep_total
-            bal.held_in_escrow -= dep_total
-            session.add(bal)
-            dep.status = "refunded"
-            dep.resolved_at = _now()
-            session.add(dep)
-            session.add(
-                Transaction(
-                    escrow_id=dep.id,
-                    from_account=None,
-                    to_account=dep.requester_id,
-                    amount=dep_total,
-                    tx_type="escrow_refund",
-                    description=f"Auto-refunded: upstream escrow {upstream_escrow_id} was refunded",
+        if not (dep.depends_on and upstream_escrow_id in dep.depends_on):
+            continue
+        if dep.workflow_locked:
+            continue
+        locked = session.execute(
+            _lock(
+                select(Escrow).where(
+                    and_(Escrow.id == dep.id, Escrow.status == "held")
                 )
             )
-            _auto_refund_dependents(session, dep.id)
+        ).scalar_one_or_none()
+        if locked is None:
+            continue
+        dep_total = int(locked.amount + locked.fee_amount)
+        bal = session.execute(
+            _lock(select(Balance).where(Balance.account_id == locked.requester_id))
+        ).scalar_one_or_none()
+        if bal is None:
+            continue
+        if not _claim_held_refund(session, locked):
+            continue
+        bal.available += dep_total
+        bal.held_in_escrow -= dep_total
+        session.add(bal)
+        session.add(
+            Transaction(
+                escrow_id=locked.id,
+                from_account=None,
+                to_account=locked.requester_id,
+                amount=dep_total,
+                tx_type="escrow_refund",
+                description=f"Auto-refunded: upstream escrow {upstream_escrow_id} was refunded",
+            )
+        )
+        release_reservation(session, locked, dep_total)
+        _auto_refund_dependents(session, locked.id)
 
 
 _WORKFLOW_LOCKED_DETAIL = "escrow is workflow locked"
