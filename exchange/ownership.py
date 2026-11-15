@@ -189,6 +189,21 @@ def attach_developer_id_by_key(
     if matched is None:
         raise HTTPException(status_code=401, detail="Invalid agent API key")
 
+    existing = session.execute(
+        select(DeveloperIdOwner).where(
+            DeveloperIdOwner.developer_id == matched.developer_id
+        )
+    ).scalar_one_or_none()
+    if (
+        existing is not None
+        and existing.status == "claimed"
+        and existing.owner_account_id != caller.id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="developer_id already claimed by another account",
+        )
+
     return claim_developer_id_for(session, caller, matched.developer_id)
 
 

@@ -354,7 +354,7 @@ def test_attach_suspended_agent_key_succeeds(client: TestClient):
     assert reclaim.json()["owner_account_id"] == new_owner["account"]["id"]
 
 
-def test_attach_cross_owner_conflict_409(client: TestClient):
+def test_attach_cross_owner_forbidden(client: TestClient):
     owner_a = _register(client, "ConflictOwnerA", SHARED_DEV)
     sibling_a = _register(client, "ConflictSiblingA", SHARED_DEV)
     owner_b = _register(client, "ConflictOwnerB", OTHER_DEV)
@@ -366,8 +366,83 @@ def test_attach_cross_owner_conflict_409(client: TestClient):
         headers={"Authorization": f"Bearer {owner_b['api_key']}"},
         json={"agent_api_key": sibling_a["api_key"]},
     )
-    assert conflict.status_code == 409
+    assert conflict.status_code == 403
     assert sibling_a["api_key"] not in conflict.text
+
+
+def test_unclaimed_and_legacy_open_registration_does_not_auto_claim(client: TestClient):
+    """A missing ownership row and an existing legacy_open row both allow registration.
+
+    Registration inserts legacy_open when the row is missing and must not claim
+    or rewrite that row. A second registration under the same id is the check.
+    """
+    fresh = "dev-legacy-open-untouched"
+    first = _register(client, "LegacyOpenFirst", fresh)
+    second = _register(client, "LegacyOpenSecond", fresh)
+    assert first["account"]["developer_id"] == fresh
+    assert second["account"]["developer_id"] == fresh
+
+
+def test_foreign_operator_cannot_register_or_attach_claimed_developer_id(
+    client: TestClient,
+):
+    """Operator B cannot register into A's claimed developer_id or attach it."""
+    owner = _register(client, "ProofOwner", SHARED_DEV)
+    sibling = _register(client, "ProofSibling", SHARED_DEV)
+    outsider = _register(client, "ProofOutsider", OTHER_DEV)
+    _claim_via_list(client, owner["api_key"])
+
+    denied = client.post(
+        "/v1/accounts/register",
+        json={
+            "bot_name": "ProofIntruder",
+            "developer_id": SHARED_DEV,
+            **_REG,
+        },
+    )
+    assert denied.status_code == 403
+
+    denied_with_own_key = client.post(
+        "/v1/accounts/register",
+        json={
+            "bot_name": "ProofIntruderKey",
+            "developer_id": SHARED_DEV,
+            "owner_api_key": outsider["api_key"],
+            **_REG,
+        },
+    )
+    assert denied_with_own_key.status_code == 403
+
+    attach = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers={"Authorization": f"Bearer {outsider['api_key']}"},
+        json={"agent_api_key": sibling["api_key"]},
+    )
+    assert attach.status_code == 403
+    assert sibling["api_key"] not in attach.text
+    assert owner["api_key"] not in attach.text
+
+    allowed = client.post(
+        "/v1/accounts/register",
+        json={
+            "bot_name": "ProofOwnerChild",
+            "developer_id": SHARED_DEV,
+            "owner_api_key": owner["api_key"],
+            **_REG,
+        },
+    )
+    assert allowed.status_code == 201, allowed.text
+
+    reattach = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers={"Authorization": f"Bearer {owner['api_key']}"},
+        json={"agent_api_key": sibling["api_key"]},
+    )
+    assert reattach.status_code == 200, reattach.text
+    assert reattach.json()["developer_id"] == SHARED_DEV
+    assert reattach.json()["owner_account_id"] == owner["account"]["id"]
+    assert reattach.json()["status"] == "claimed"
+    assert sibling["api_key"] not in reattach.text
 
 
 def test_detach_developer_id_and_cannot_detach_primary(client: TestClient):
