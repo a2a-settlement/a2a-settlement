@@ -147,6 +147,8 @@ class Account(Base):
     # Oracle role — set by operator via /accounts/admin/register-oracle
     is_oracle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # KYA identity fields
     kya_level_verified: Mapped[int] = mapped_column(nullable=False, default=0)
     did: Mapped[str | None] = mapped_column(
@@ -187,6 +189,31 @@ class Account(Base):
         ),
         CheckConstraint(
             "account_type IN ('agent', 'gateway')", name="ck_account_type"
+        ),
+    )
+
+
+class DeveloperIdOwner(Base):
+    """Ownership of a developer_id for managed agent administration."""
+
+    __tablename__ = "developer_id_owners"
+
+    developer_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    owner_account_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('legacy_open', 'claimed')",
+            name="ck_developer_id_owner_status",
         ),
     )
 

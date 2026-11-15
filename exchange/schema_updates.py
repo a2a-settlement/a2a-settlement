@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 _ACCOUNT_COLUMNS = {
     "obligation_policy_id": "VARCHAR(36)",
     "root_budget_id": "VARCHAR(36)",
+    "is_test": "BOOLEAN NOT NULL DEFAULT FALSE",
 }
 _ESCROW_COLUMNS = {
     "obligation_policy_id": "VARCHAR(36)",
@@ -38,3 +39,14 @@ def _add_missing(engine: Engine, table: str, columns: dict[str, str]) -> None:
 def ensure_assurance_schema(engine: Engine) -> None:
     _add_missing(engine, "accounts", _ACCOUNT_COLUMNS)
     _add_missing(engine, "escrows", _ESCROW_COLUMNS)
+    from sqlalchemy.orm import sessionmaker
+
+    from exchange.models import Base
+
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as session:
+        with session.begin():
+            from exchange.ownership import grandfather_legacy_open
+
+            grandfather_legacy_open(session)

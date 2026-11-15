@@ -34,6 +34,9 @@ class RegisterRequest(BaseModel):
     invite_code: str | None = None
     daily_spend_limit: int | None = None
     account_type: str = Field("agent", pattern=r"^(agent|gateway)$")
+    is_test: bool = False
+    # Required when developer_id is already claimed: the owner's ate_ key.
+    owner_api_key: str | None = None
 
 
 class RegisterAccountInfo(BaseModel):

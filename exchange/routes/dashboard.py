@@ -318,6 +318,28 @@ def unsuspend_agent(
     return {"agent_id": agent_id, "status": "active"}
 
 
+@router.post("/dashboard/agents/{agent_id}/is-test")
+def set_agent_is_test(
+    agent_id: str,
+    body: dict,
+    session: Session = Depends(get_session),
+    authorization: str | None = Header(default=None),
+):
+    """Admin toggle for accounts.is_test (hide-from-directory defaults)."""
+    _check_dashboard_key(authorization)
+    if "is_test" not in body or not isinstance(body.get("is_test"), bool):
+        raise HTTPException(status_code=422, detail="Body must include boolean is_test")
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == agent_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        acct.is_test = body["is_test"]
+        session.add(acct)
+
+    return {"agent_id": agent_id, "is_test": acct.is_test}
+
+
 # ---------------------------------------------------------------------------
 # Escrow management
 # ---------------------------------------------------------------------------

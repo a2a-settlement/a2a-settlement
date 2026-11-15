@@ -38,6 +38,12 @@ from exchange.identity.did_resolver import DIDResolver
 from exchange.identity.issuer_registry import IssuerRegistry
 from exchange.identity.models import AgentCardModel
 from exchange.identity.vc_verifier import VCVerifier
+from exchange.ownership import (
+    assert_controls_developer_id,
+    assert_registration_allowed,
+    claim_developer_id,
+    ensure_legacy_open,
+)
 from exchange.principal_resolver import (
     get_or_create_principal,
     link_agent_to_principal,
@@ -100,6 +106,9 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
         if existing is not None:
             raise HTTPException(status_code=409, detail="A bot with this name already exists")
 
+        assert_registration_allowed(session, req.developer_id, req.owner_api_key)
+        ensure_legacy_open(session, req.developer_id)
+
         spend_limit = req.daily_spend_limit
         if spend_limit is None and settings.default_daily_spend_limit > 0:
             spend_limit = settings.default_daily_spend_limit
@@ -114,6 +123,7 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
             skills=req.skills or [],
             daily_spend_limit=spend_limit,
             account_type=req.account_type,
+            is_test=req.is_test,
         )
         session.add(account)
         session.flush()
@@ -270,6 +280,156 @@ def directory(
     return DirectoryResponse(
         bots=[_directory_account_response(b, claims_by_agent.get(b.id)) for b in bots],
         count=len(bots),
+    )
+
+
+@router.get("/accounts/managed", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def list_managed_accounts(
+    request: Request,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        claim_developer_id(session, caller)
+        developer_id = caller.developer_id
+        bots = session.execute(
+            select(Account)
+            .where(Account.developer_id == developer_id)
+            .where(Account.account_type != "gateway")
+            .order_by(Account.created_at)
+        ).scalars().all()
+        payload = [
+            {
+                "id": b.id,
+                "bot_name": b.bot_name,
+                "status": b.status,
+                "developer_id": b.developer_id,
+                "reputation": float(b.reputation),
+                "created_at": b.created_at,
+                "is_test": bool(b.is_test),
+            }
+            for b in bots
+        ]
+
+    return {
+        "developer_id": developer_id,
+        "bots": payload,
+        "count": len(payload),
+    }
+
+
+@router.post("/accounts/developer-ids/claim", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def claim_developer_id_route(
+    request: Request,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row = claim_developer_id(session, caller)
+
+    return {
+        "developer_id": row.developer_id,
+        "owner_account_id": row.owner_account_id,
+        "status": row.status,
+    }
+
+
+@router.post(
+    "/accounts/{account_id}/suspend",
+    response_model=SuspendResponse,
+    tags=["Accounts"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def suspend_managed_account(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> SuspendResponse:
+    with session.begin():
+        target = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        assert_controls_developer_id(session, current["id"], target.developer_id)
+        if target.status == "operator":
+            raise HTTPException(status_code=400, detail="Cannot suspend an operator account")
+        if target.id == current["id"]:
+            raise HTTPException(status_code=400, detail="Cannot suspend your own account")
+        target.status = "suspended"
+        session.add(target)
+
+    return SuspendResponse(account_id=target.id, status="suspended")
+
+
+@router.post("/accounts/{account_id}/unsuspend", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def unsuspend_managed_account(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        target = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        assert_controls_developer_id(session, current["id"], target.developer_id)
+        if target.status == "suspended":
+            target.status = "active"
+            session.add(target)
+
+    return {"account_id": target.id, "status": target.status}
+
+
+@router.post(
+    "/accounts/{account_id}/rotate-key-managed",
+    response_model=RotateKeyResponse,
+    tags=["Accounts"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def rotate_key_managed(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> RotateKeyResponse:
+    new_key = f"ate_{secrets.token_hex(16)}"
+    new_hash = bcrypt.hashpw(
+        new_key.encode("utf-8"),
+        bcrypt.gensalt(rounds=settings.api_key_salt_rounds),
+    ).decode("utf-8")
+
+    with session.begin():
+        target = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        assert_controls_developer_id(session, current["id"], target.developer_id)
+        target.previous_api_key_hash = target.api_key_hash
+        target.key_rotated_at = datetime.now(timezone.utc)
+        target.api_key_hash = new_hash
+        session.add(target)
+
+    return RotateKeyResponse(
+        api_key=new_key,
+        grace_period_minutes=settings.key_rotation_grace_minutes,
     )
 
 
