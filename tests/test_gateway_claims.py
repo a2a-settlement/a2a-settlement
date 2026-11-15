@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.registration_helpers import post_register
+
 _REG_PAYLOAD = {
     "bot_name": "TestBot",
     "developer_id": "dev-test",
@@ -51,10 +53,7 @@ def _make_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env_overrides):
 
 
 def _register_agent(client: TestClient, bot_name: str = "AgentBot") -> dict:
-    resp = client.post(
-        "/v1/accounts/register",
-        json={**_REG_PAYLOAD, "bot_name": bot_name},
-    )
+    resp = post_register(client, {**_REG_PAYLOAD, "bot_name": bot_name})
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -62,9 +61,9 @@ def _register_agent(client: TestClient, bot_name: str = "AgentBot") -> dict:
 def _register_gateway(
     client: TestClient, invite_code: str, bot_name: str = "GwBot"
 ) -> dict:
-    resp = client.post(
-        "/v1/accounts/register",
-        json={
+    resp = post_register(
+        client,
+        {
             **_GATEWAY_PAYLOAD,
             "bot_name": bot_name,
             "invite_code": invite_code,
@@ -90,9 +89,9 @@ def test_gateway_registration_rejected_with_wrong_code(tmp_path, monkeypatch):
         tmp_path, monkeypatch, A2A_EXCHANGE_GATEWAY_INVITE_CODE="gw-secret"
     )
     with TestClient(app) as client:
-        resp = client.post(
-            "/v1/accounts/register",
-            json={**_GATEWAY_PAYLOAD, "invite_code": "wrong"},
+        resp = post_register(
+            client,
+            {**_GATEWAY_PAYLOAD, "invite_code": "wrong"},
         )
         assert resp.status_code == 403
         assert "gateway invite" in resp.json()["detail"].lower()
@@ -103,9 +102,9 @@ def test_gateway_registration_accepted_with_correct_code(tmp_path, monkeypatch):
         tmp_path, monkeypatch, A2A_EXCHANGE_GATEWAY_INVITE_CODE="gw-secret"
     )
     with TestClient(app) as client:
-        resp = client.post(
-            "/v1/accounts/register",
-            json={**_GATEWAY_PAYLOAD, "invite_code": "gw-secret"},
+        resp = post_register(
+            client,
+            {**_GATEWAY_PAYLOAD, "invite_code": "gw-secret"},
         )
         assert resp.status_code == 201
         body = resp.json()
@@ -134,22 +133,22 @@ def test_agent_invite_code_independent_of_gateway_invite(tmp_path, monkeypatch):
     )
     with TestClient(app) as client:
         # Agent needs agent invite, not gateway invite
-        resp = client.post(
-            "/v1/accounts/register",
-            json={**_REG_PAYLOAD, "invite_code": "gw-secret"},
+        resp = post_register(
+            client,
+            {**_REG_PAYLOAD, "invite_code": "gw-secret"},
         )
         assert resp.status_code == 403
 
-        resp = client.post(
-            "/v1/accounts/register",
-            json={**_REG_PAYLOAD, "invite_code": "agent-secret"},
+        resp = post_register(
+            client,
+            {**_REG_PAYLOAD, "invite_code": "agent-secret"},
         )
         assert resp.status_code == 201
 
         # Gateway needs gateway invite, not agent invite
-        resp = client.post(
-            "/v1/accounts/register",
-            json={
+        resp = post_register(
+            client,
+            {
                 **_GATEWAY_PAYLOAD,
                 "bot_name": "Gw1",
                 "invite_code": "agent-secret",
@@ -157,9 +156,9 @@ def test_agent_invite_code_independent_of_gateway_invite(tmp_path, monkeypatch):
         )
         assert resp.status_code == 403
 
-        resp = client.post(
-            "/v1/accounts/register",
-            json={
+        resp = post_register(
+            client,
+            {
                 **_GATEWAY_PAYLOAD,
                 "bot_name": "Gw2",
                 "invite_code": "gw-secret",

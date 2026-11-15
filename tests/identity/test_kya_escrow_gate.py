@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.registration_helpers import post_register
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -16,9 +18,9 @@ if str(REPO_ROOT) not in sys.path:
 
 def _register(client: TestClient, name: str) -> tuple[str, dict]:
     """Register an agent and return (api_key, response_data)."""
-    resp = client.post(
-        "/v1/accounts/register",
-        json={
+    resp = post_register(
+        client,
+        {
             "bot_name": name,
             "developer_id": "dev",
             "developer_name": "Dev",

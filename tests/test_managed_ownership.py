@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib
+import itertools
 import json
 from pathlib import Path
 
@@ -38,7 +39,33 @@ def _sample_card(name: str = "ManagedAgent", agent_id: str = "did:web:agent.test
     }
 
 
+_CREATED_BASE = datetime(2020, 1, 1, tzinfo=timezone.utc)
+_created_seq = itertools.count(1)
+
+
+def _set_created_at(account_id: str, when: datetime) -> None:
+    from sqlalchemy import select
+
+    from exchange.config import get_session
+    from exchange.models import Account
+
+    session = next(get_session())
+    try:
+        with session.begin():
+            acct = session.execute(
+                select(Account).where(Account.id == account_id)
+            ).scalar_one()
+            acct.created_at = when
+    finally:
+        session.close()
+
+
 def _register(client: TestClient, bot_name: str, developer_id: str, **extra) -> dict:
+    """Register and stamp a strictly increasing created_at.
+
+    SQLite CURRENT_TIMESTAMP has one-second resolution, so registration order
+    would otherwise tie and "oldest agent" would depend on random account ids.
+    """
     payload = {
         "bot_name": bot_name,
         "developer_id": developer_id,
@@ -47,7 +74,35 @@ def _register(client: TestClient, bot_name: str, developer_id: str, **extra) -> 
     }
     resp = client.post("/v1/accounts/register", json=payload)
     assert resp.status_code == 201, resp.text
-    return resp.json()
+    body = resp.json()
+    _set_created_at(
+        body["account"]["id"], _CREATED_BASE + timedelta(seconds=next(_created_seq))
+    )
+    return body
+
+
+def _db_session():
+    from exchange.config import get_session
+
+    return next(get_session())
+
+
+def _owner_row(developer_id: str) -> tuple[str, str | None] | None:
+    from sqlalchemy import select
+
+    from exchange.models import DeveloperIdOwner
+
+    session = _db_session()
+    try:
+        with session.begin():
+            row = session.execute(
+                select(DeveloperIdOwner).where(
+                    DeveloperIdOwner.developer_id == developer_id
+                )
+            ).scalar_one_or_none()
+            return None if row is None else (row.status, row.owner_account_id)
+    finally:
+        session.close()
 
 
 def _claim_via_list(client: TestClient, api_key: str) -> dict:
@@ -67,7 +122,9 @@ def client(exchange_app):
 
 def test_owner_manages_siblings_after_claim(client: TestClient):
     owner = _register(client, "OwnerBot", SHARED_DEV)
-    sibling = _register(client, "SiblingBot", SHARED_DEV, is_test=True)
+    sibling = _register(
+        client, "SiblingBot", SHARED_DEV, is_test=True, owner_api_key=owner["api_key"]
+    )
 
     owner_key = owner["api_key"]
     sibling_id = sibling["account"]["id"]
@@ -128,7 +185,7 @@ def test_cross_developer_id_forbidden(client: TestClient):
 
 def test_second_claimer_gets_409(client: TestClient):
     first = _register(client, "ClaimFirst", SHARED_DEV)
-    second = _register(client, "ClaimSecond", SHARED_DEV)
+    second = _register(client, "ClaimSecond", SHARED_DEV, owner_api_key=first["api_key"])
 
     _claim_via_list(client, first["api_key"])
 
@@ -149,7 +206,7 @@ def test_managed_list_excludes_api_key_fields(client: TestClient):
 
 def test_claimed_developer_id_blocks_registration_without_owner_key(client: TestClient):
     owner = _register(client, "GateOwner", SHARED_DEV)
-    sibling = _register(client, "GateSibling", SHARED_DEV)
+    sibling = _register(client, "GateSibling", SHARED_DEV, owner_api_key=owner["api_key"])
     stranger = _register(client, "GateStranger", OTHER_DEV)
     _claim_via_list(client, owner["api_key"])
 
@@ -245,7 +302,9 @@ def test_register_agent_claimed_developer_id_blocks_non_owner(client: TestClient
 def test_multi_id_attach_and_managed_list(client: TestClient):
     owner = _register(client, "PrimaryOwner", SHARED_DEV)
     ext_a = _register(client, "SecondaryAgentA", SECOND_DEV)
-    ext_b = _register(client, "SecondaryAgentB", SECOND_DEV, is_test=True)
+    ext_b = _register(
+        client, "SecondaryAgentB", SECOND_DEV, is_test=True, owner_api_key=ext_a["api_key"]
+    )
 
     owner_hdr = {"Authorization": f"Bearer {owner['api_key']}"}
 
@@ -356,7 +415,9 @@ def test_attach_suspended_agent_key_succeeds(client: TestClient):
 
 def test_attach_cross_owner_forbidden(client: TestClient):
     owner_a = _register(client, "ConflictOwnerA", SHARED_DEV)
-    sibling_a = _register(client, "ConflictSiblingA", SHARED_DEV)
+    sibling_a = _register(
+        client, "ConflictSiblingA", SHARED_DEV, owner_api_key=owner_a["api_key"]
+    )
     owner_b = _register(client, "ConflictOwnerB", OTHER_DEV)
 
     _claim_via_list(client, owner_a["api_key"])
@@ -371,16 +432,17 @@ def test_attach_cross_owner_forbidden(client: TestClient):
 
 
 def test_unclaimed_and_legacy_open_registration_does_not_auto_claim(client: TestClient):
-    """A missing ownership row and an existing legacy_open row both allow registration.
+    """A missing ownership row allows registration; legacy_open needs a member key.
 
     Registration inserts legacy_open when the row is missing and must not claim
     or rewrite that row. A second registration under the same id is the check.
     """
     fresh = "dev-legacy-open-untouched"
     first = _register(client, "LegacyOpenFirst", fresh)
-    second = _register(client, "LegacyOpenSecond", fresh)
+    second = _register(client, "LegacyOpenSecond", fresh, owner_api_key=first["api_key"])
     assert first["account"]["developer_id"] == fresh
     assert second["account"]["developer_id"] == fresh
+    assert _owner_row(fresh) == ("legacy_open", None)
 
 
 def test_foreign_operator_cannot_register_or_attach_claimed_developer_id(
@@ -388,7 +450,7 @@ def test_foreign_operator_cannot_register_or_attach_claimed_developer_id(
 ):
     """Operator B cannot register into A's claimed developer_id or attach it."""
     owner = _register(client, "ProofOwner", SHARED_DEV)
-    sibling = _register(client, "ProofSibling", SHARED_DEV)
+    sibling = _register(client, "ProofSibling", SHARED_DEV, owner_api_key=owner["api_key"])
     outsider = _register(client, "ProofOutsider", OTHER_DEV)
     _claim_via_list(client, owner["api_key"])
 
@@ -501,7 +563,7 @@ def test_detach_developer_id_and_cannot_detach_primary(client: TestClient):
 
 def test_managed_list_when_primary_dev_id_claimed_by_another(client: TestClient):
     first = _register(client, "SharedFirst", SHARED_DEV)
-    second = _register(client, "SharedSecond", SHARED_DEV)
+    second = _register(client, "SharedSecond", SHARED_DEV, owner_api_key=first["api_key"])
     extra = _register(client, "ExtraOwned", SECOND_DEV)
 
     _claim_via_list(client, first["api_key"])
@@ -521,7 +583,7 @@ def test_managed_list_when_primary_dev_id_claimed_by_another(client: TestClient)
 
 def test_put_card_controller_scoped_and_has_agent_card_flag(client: TestClient):
     owner = _register(client, "CardOwner", SHARED_DEV)
-    sibling = _register(client, "CardSibling", SHARED_DEV)
+    sibling = _register(client, "CardSibling", SHARED_DEV, owner_api_key=owner["api_key"])
     attached = _register(client, "CardAttached", SECOND_DEV)
     outsider = _register(client, "CardOutsider", OTHER_DEV)
 
@@ -604,7 +666,7 @@ def test_put_card_controller_scoped_and_has_agent_card_flag(client: TestClient):
 
 def test_get_settlements_controller_scoped_and_excludes_mint(client: TestClient):
     owner = _register(client, "SettleOwner", SHARED_DEV)
-    sibling = _register(client, "SettleSibling", SHARED_DEV)
+    sibling = _register(client, "SettleSibling", SHARED_DEV, owner_api_key=owner["api_key"])
     counterparty = _register(client, "SettleCounterparty", OTHER_DEV)
 
     owner_hdr = {"Authorization": f"Bearer {owner['api_key']}"}
@@ -739,8 +801,12 @@ def test_managed_list_includes_gateway_claims_and_gateway_caller_agents(
 
     with TestClient(app_mod.create_app()) as gw_client:
         owner = _register(gw_client, "GwTestOwner", SHARED_DEV)
-        agent_v = _register(gw_client, "GwVerifiedAgent", SHARED_DEV)
-        agent_s = _register(gw_client, "GwSoftAgent", SHARED_DEV)
+        agent_v = _register(
+            gw_client, "GwVerifiedAgent", SHARED_DEV, owner_api_key=owner["api_key"]
+        )
+        agent_s = _register(
+            gw_client, "GwSoftAgent", SHARED_DEV, owner_api_key=owner["api_key"]
+        )
 
         gw_resp = gw_client.post(
             "/v1/accounts/register",
@@ -797,3 +863,225 @@ def test_managed_list_includes_gateway_claims_and_gateway_caller_agents(
         assert claimed_ids == {agent_v["account"]["id"], agent_s["account"]["id"]}
         flat_gw = json.dumps(gw_list)
         assert "api_key" not in flat_gw
+
+# --- legacy_open: oldest-agent claim and member-key registration ---
+
+LEGACY_DEV = "dev-legacy-open-rules"
+LEGACY_DID = "did:web:legacy.open.rules"
+
+
+def _delete_owner_row(developer_id: str) -> None:
+    from sqlalchemy import delete
+
+    from exchange.models import DeveloperIdOwner
+
+    session = _db_session()
+    try:
+        with session.begin():
+            session.execute(
+                delete(DeveloperIdOwner).where(
+                    DeveloperIdOwner.developer_id == developer_id
+                )
+            )
+    finally:
+        session.close()
+
+
+def _insert_legacy_open_row(developer_id: str) -> None:
+    from exchange.models import DeveloperIdOwner
+
+    session = _db_session()
+    try:
+        with session.begin():
+            session.add(DeveloperIdOwner(developer_id=developer_id, status="legacy_open"))
+    finally:
+        session.close()
+
+
+def test_legacy_open_claim_requires_oldest_agent_key(client: TestClient):
+    oldest = _register(client, "LegacyOldest", LEGACY_DEV)
+    newer = _register(client, "LegacyNewer", LEGACY_DEV, owner_api_key=oldest["api_key"])
+    outsider = _register(client, "LegacyOutsider", OTHER_DEV)
+    assert _owner_row(LEGACY_DEV) == ("legacy_open", None)
+
+    claim = client.post(
+        "/v1/accounts/developer-ids/claim",
+        headers={"Authorization": f"Bearer {newer['api_key']}"},
+    )
+    assert claim.status_code == 403
+    assert "oldest" in claim.json()["detail"]
+
+    listed = _claim_via_list(client, newer["api_key"])
+    assert listed["developer_ids"] == []
+    assert listed["bots"] == []
+    assert _owner_row(LEGACY_DEV) == ("legacy_open", None)
+
+    attach = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers={"Authorization": f"Bearer {outsider['api_key']}"},
+        json={"agent_api_key": newer["api_key"]},
+    )
+    assert attach.status_code == 403
+    assert "oldest" in attach.json()["detail"]
+    assert newer["api_key"] not in attach.text
+    assert _owner_row(LEGACY_DEV) == ("legacy_open", None)
+
+    ok = client.post(
+        "/v1/accounts/developer-ids/claim",
+        headers={"Authorization": f"Bearer {oldest['api_key']}"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json() == {
+        "developer_id": LEGACY_DEV,
+        "owner_account_id": oldest["account"]["id"],
+        "status": "claimed",
+    }
+
+    second = client.post(
+        "/v1/accounts/developer-ids/claim",
+        headers={"Authorization": f"Bearer {newer['api_key']}"},
+    )
+    assert second.status_code == 409
+
+
+def test_legacy_open_attach_with_oldest_key_succeeds(client: TestClient):
+    oldest = _register(client, "AttachOldest", LEGACY_DEV)
+    _register(client, "AttachNewer", LEGACY_DEV, owner_api_key=oldest["api_key"])
+    operator = _register(client, "AttachOperator", OTHER_DEV)
+
+    resp = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers={"Authorization": f"Bearer {operator['api_key']}"},
+        json={"agent_api_key": oldest["api_key"]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert oldest["api_key"] not in resp.text
+    assert resp.json() == {
+        "developer_id": LEGACY_DEV,
+        "owner_account_id": operator["account"]["id"],
+        "status": "claimed",
+    }
+
+
+def test_legacy_open_oldest_tie_broken_by_account_id(client: TestClient):
+    a = _register(client, "TieA", LEGACY_DEV)
+    b = _register(client, "TieB", LEGACY_DEV, owner_api_key=a["api_key"])
+    same = _CREATED_BASE
+    _set_created_at(a["account"]["id"], same)
+    _set_created_at(b["account"]["id"], same)
+    first, second = sorted([a, b], key=lambda r: r["account"]["id"])
+
+    denied = client.post(
+        "/v1/accounts/developer-ids/claim",
+        headers={"Authorization": f"Bearer {second['api_key']}"},
+    )
+    assert denied.status_code == 403
+    ok = client.post(
+        "/v1/accounts/developer-ids/claim",
+        headers={"Authorization": f"Bearer {first['api_key']}"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["owner_account_id"] == first["account"]["id"]
+
+
+def test_legacy_open_registration_requires_member_key_on_both_paths(client: TestClient):
+    oldest = _register(client, "MemberOldest", LEGACY_DID)
+    member = _register(client, "MemberNewer", LEGACY_DID, owner_api_key=oldest["api_key"])
+    outsider = _register(client, "MemberOutsider", OTHER_DEV)
+
+    def reg(name: str, **extra):
+        return client.post(
+            "/v1/accounts/register",
+            json={"bot_name": name, "developer_id": LEGACY_DID, **_REG, **extra},
+        )
+
+    no_key = reg("RegNoKey")
+    assert no_key.status_code == 403
+    assert "already has agents" in no_key.json()["detail"]
+    assert reg("RegOutsiderKey", owner_api_key=outsider["api_key"]).status_code == 403
+    assert reg("RegNotAKey", owner_api_key="not_an_ate_key").status_code == 403
+
+    card_no_key = client.post(
+        "/v1/accounts/register-agent",
+        json=_sample_card(name="CardNoKey", agent_id=LEGACY_DID),
+    )
+    assert card_no_key.status_code == 403
+    card_outsider_body = client.post(
+        "/v1/accounts/register-agent",
+        json={
+            **_sample_card(name="CardOutsiderBody", agent_id=LEGACY_DID),
+            "owner_api_key": outsider["api_key"],
+        },
+    )
+    assert card_outsider_body.status_code == 403
+    card_outsider_header = client.post(
+        "/v1/accounts/register-agent",
+        json=_sample_card(name="CardOutsiderHeader", agent_id=LEGACY_DID),
+        headers={"X-Owner-Api-Key": outsider["api_key"]},
+    )
+    assert card_outsider_header.status_code == 403
+
+    allowed = reg("RegMemberKey", owner_api_key=member["api_key"])
+    assert allowed.status_code == 201, allowed.text
+    assert _owner_row(LEGACY_DID) == ("legacy_open", None)
+
+    card_allowed = client.post(
+        "/v1/accounts/register-agent",
+        json=_sample_card(name="CardMemberKey", agent_id=LEGACY_DID),
+        headers={"X-Owner-Api-Key": member["api_key"]},
+    )
+    assert card_allowed.status_code == 201, card_allowed.text
+    assert _owner_row(LEGACY_DID) == ("legacy_open", None)
+
+    card_body_key = client.post(
+        "/v1/accounts/register-agent",
+        json={
+            **_sample_card(name="CardMemberBodyKey", agent_id=LEGACY_DID),
+            "owner_api_key": oldest["api_key"],
+        },
+    )
+    assert card_body_key.status_code == 201, card_body_key.text
+    stored = client.get(f"/v1/accounts/{card_body_key.json()['account']['id']}/card")
+    assert stored.status_code == 200
+    assert "owner_api_key" not in stored.text
+    assert oldest["api_key"] not in stored.text
+    assert _owner_row(LEGACY_DID) == ("legacy_open", None)
+
+
+def test_empty_or_unknown_developer_id_stays_open(client: TestClient):
+    unknown = "dev-never-seen-before"
+    assert _owner_row(unknown) is None
+    first = client.post(
+        "/v1/accounts/register",
+        json={"bot_name": "UnknownFirst", "developer_id": unknown, **_REG},
+    )
+    assert first.status_code == 201, first.text
+    assert _owner_row(unknown) == ("legacy_open", None)
+
+    card = client.post(
+        "/v1/accounts/register-agent",
+        json=_sample_card(name="UnknownCard", agent_id="did:web:never.seen"),
+    )
+    assert card.status_code == 201, card.text
+
+    empty = "dev-legacy-open-empty"
+    _insert_legacy_open_row(empty)
+    empty_reg = client.post(
+        "/v1/accounts/register",
+        json={"bot_name": "EmptyFirst", "developer_id": empty, **_REG},
+    )
+    assert empty_reg.status_code == 201, empty_reg.text
+    assert _owner_row(empty) == ("legacy_open", None)
+
+
+def test_missing_owner_row_keeps_first_claimer_wins(client: TestClient):
+    a = _register(client, "MissingRowA", LEGACY_DEV)
+    b = _register(client, "MissingRowB", LEGACY_DEV, owner_api_key=a["api_key"])
+    _delete_owner_row(LEGACY_DEV)
+
+    resp = client.post(
+        "/v1/accounts/developer-ids/claim",
+        headers={"Authorization": f"Bearer {b['api_key']}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["owner_account_id"] == b["account"]["id"]

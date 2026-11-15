@@ -39,6 +39,7 @@ def _register_pair(client: TestClient, auth_header):
         json={
             "bot_name": "ConfRequester",
             "developer_id": "conf",
+            "owner_api_key": provider["api_key"],
             "developer_name": "Conf",
             "contact_email": "conf2@test.dev",
             "skills": ["conformance"],

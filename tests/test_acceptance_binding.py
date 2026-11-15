@@ -6,6 +6,7 @@ import hashlib
 
 from fastapi.testclient import TestClient
 
+from tests.registration_helpers import post_register
 from tests.test_dispute import _promote_to_operator
 
 CRITERIA = hashlib.sha256(b"criteria-v1").hexdigest()
@@ -15,9 +16,9 @@ TASK = "task-analytical-1"
 
 
 def _register(client, name, skills):
-    resp = client.post(
-        "/v1/accounts/register",
-        json={
+    resp = post_register(
+        client,
+        {
             "bot_name": name,
             "developer_id": "dev",
             "developer_name": "Test Dev",

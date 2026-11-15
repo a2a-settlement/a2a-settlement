@@ -44,6 +44,7 @@ def test_same_key_different_body_conflicts(exchange_app, auth_header):
             json={
                 "bot_name": "OtherProvider",
                 "developer_id": "dev",
+                "owner_api_key": ctx["requester"]["api_key"],
                 "developer_name": "Test Dev",
                 "contact_email": "test@test.dev",
                 "skills": ["analysis"],
@@ -65,6 +66,7 @@ def test_same_key_other_principal_does_not_collide(exchange_app, auth_header):
             json={
                 "bot_name": "SiblingPayer",
                 "developer_id": "dev",
+                "owner_api_key": ctx["requester"]["api_key"],
                 "developer_name": "Test Dev",
                 "contact_email": "test@test.dev",
                 "skills": ["orchestration"],
@@ -80,6 +82,7 @@ def test_same_key_other_principal_does_not_collide(exchange_app, auth_header):
             json={
                 "bot_name": "ProviderB",
                 "developer_id": "dev",
+                "owner_api_key": ctx["requester"]["api_key"],
                 "developer_name": "Test Dev",
                 "contact_email": "test@test.dev",
                 "skills": ["analysis"],
@@ -165,6 +168,7 @@ def test_unbound_instant_settle_replay_pays_once(exchange_app, auth_header):
             json={
                 "bot_name": "InstantProvider",
                 "developer_id": "dev",
+                "owner_api_key": requester["api_key"],
                 "developer_name": "Test Dev",
                 "contact_email": "test@test.dev",
                 "skills": ["analysis"],

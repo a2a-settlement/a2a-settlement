@@ -11,7 +11,7 @@ def test_escrow_moves_available_to_held(exchange_app, auth_header):
         ).json()
         requester = client.post(
             "/v1/accounts/register",
-            json={"bot_name": "RequesterBot", "developer_id": "dev", "developer_name": "Test Dev", "contact_email": "test@test.dev", "skills": ["orchestration"]},
+            json={"bot_name": "RequesterBot", "developer_id": "dev", "owner_api_key": provider["api_key"], "developer_name": "Test Dev", "contact_email": "test@test.dev", "skills": ["orchestration"]},
         ).json()
 
         provider_id = provider["account"]["id"]

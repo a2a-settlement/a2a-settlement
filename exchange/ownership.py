@@ -29,6 +29,16 @@ def assert_controls_developer_id(
         )
 
 
+LEGACY_OPEN_CLAIM_DENIED = (
+    "This developer ID is unclaimed. Only the API key of the oldest agent "
+    "registered under it can claim or attach it."
+)
+LEGACY_OPEN_REGISTRATION_DENIED = (
+    "This developer ID already has agents. Pass owner_api_key with the API key "
+    "of an agent registered under it to register another agent."
+)
+
+
 def _check_api_key(api_key: str, api_key_hash: str) -> bool:
     try:
         return bcrypt.checkpw(api_key.encode("utf-8"), api_key_hash.encode("utf-8"))
@@ -36,14 +46,73 @@ def _check_api_key(api_key: str, api_key_hash: str) -> bool:
         return False
 
 
+def _key_matches(acct: Account, api_key: str, now: datetime) -> bool:
+    """Current key, or the previous key inside the rotation grace window."""
+    if _check_api_key(api_key, acct.api_key_hash):
+        return True
+    if acct.previous_api_key_hash and acct.key_rotated_at:
+        rotated_at = (
+            acct.key_rotated_at
+            if acct.key_rotated_at.tzinfo is not None
+            else acct.key_rotated_at.replace(tzinfo=timezone.utc)
+        )
+        grace = timedelta(minutes=settings.key_rotation_grace_minutes)
+        if (now - rotated_at) < grace and _check_api_key(
+            api_key, acct.previous_api_key_hash
+        ):
+            return True
+    return False
+
+
+def oldest_account_for(session: Session, developer_id: str) -> Account | None:
+    """Earliest-created account in developer_id; ties broken by account id."""
+    return (
+        session.execute(
+            select(Account)
+            .where(Account.developer_id == developer_id)
+            .order_by(Account.created_at.asc(), Account.id.asc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+
+
+def _assert_legacy_open_member_key(
+    session: Session, developer_id: str, owner_api_key: str | None
+) -> None:
+    members = (
+        session.execute(select(Account).where(Account.developer_id == developer_id))
+        .scalars()
+        .all()
+    )
+    if not members:
+        return
+    if not owner_api_key or not owner_api_key.startswith("ate_"):
+        raise HTTPException(status_code=403, detail=LEGACY_OPEN_REGISTRATION_DENIED)
+    now = datetime.now(timezone.utc)
+    if not any(_key_matches(acct, owner_api_key, now) for acct in members):
+        raise HTTPException(status_code=403, detail=LEGACY_OPEN_REGISTRATION_DENIED)
+
+
 def assert_registration_allowed(
     session: Session, developer_id: str, owner_api_key: str | None
 ) -> None:
-    """Block new registrations under a claimed developer_id without the owner key."""
+    """Gate new registrations under an existing developer_id.
+
+    claimed: owner_api_key must be the claimed owner's key.
+    legacy_open with agents: owner_api_key must belong to an agent in the ID.
+    No row, or legacy_open with no agents: open.
+    """
     row = session.execute(
         select(DeveloperIdOwner).where(DeveloperIdOwner.developer_id == developer_id)
     ).scalar_one_or_none()
-    if row is None or row.status != "claimed" or not row.owner_account_id:
+    if row is None:
+        return
+    if row.status == "legacy_open":
+        _assert_legacy_open_member_key(session, developer_id, owner_api_key)
+        return
+    if row.status != "claimed" or not row.owner_account_id:
         return
     if not owner_api_key or not owner_api_key.startswith("ate_"):
         raise HTTPException(
@@ -84,8 +153,18 @@ def grandfather_legacy_open(session: Session) -> int:
 
 
 def claim_developer_id_for(
-    session: Session, caller: Account, developer_id: str
+    session: Session,
+    caller: Account,
+    developer_id: str,
+    prover: Account | None = None,
 ) -> DeveloperIdOwner:
+    """Claim developer_id for caller.
+
+    ``prover`` is the account whose API key was presented (defaults to caller).
+    A legacy_open ID with agents can only be claimed when prover is the oldest
+    agent in that ID.
+    """
+    prover = prover or caller
     row = session.execute(
         select(DeveloperIdOwner).where(DeveloperIdOwner.developer_id == developer_id)
     ).scalar_one_or_none()
@@ -102,6 +181,9 @@ def claim_developer_id_for(
         return row
 
     if row.status == "legacy_open":
+        oldest = oldest_account_for(session, developer_id)
+        if oldest is not None and oldest.id != prover.id:
+            raise HTTPException(status_code=403, detail=LEGACY_OPEN_CLAIM_DENIED)
         row.status = "claimed"
         row.owner_account_id = caller.id
         row.claimed_at = datetime.now(timezone.utc)
@@ -129,8 +211,9 @@ def try_claim_own_developer_id(
 ) -> DeveloperIdOwner | None:
     """Auto-claim caller.developer_id if unclaimed, legacy_open, or owned by caller.
 
-    Does not raise 409 when caller.developer_id is already claimed by another account,
-    allowing GET /accounts/managed to list any other developer_ids owned by caller.
+    Does not raise when caller.developer_id is claimed by another account, or is
+    legacy_open and caller is not its oldest agent, allowing GET /accounts/managed
+    to list any other developer_ids owned by caller.
     """
     row = session.execute(
         select(DeveloperIdOwner).where(
@@ -143,6 +226,10 @@ def try_claim_own_developer_id(
         and row.owner_account_id != caller.id
     ):
         return None
+    if row is not None and row.status == "legacy_open":
+        oldest = oldest_account_for(session, caller.developer_id)
+        if oldest is not None and oldest.id != caller.id:
+            return None
     return claim_developer_id_for(session, caller, caller.developer_id)
 
 
@@ -167,25 +254,9 @@ def attach_developer_id_by_key(
         .all()
     )
     now = datetime.now(timezone.utc)
-    grace = timedelta(minutes=settings.key_rotation_grace_minutes)
-
-    matched: Account | None = None
-    for acct in accounts:
-        if _check_api_key(agent_api_key, acct.api_key_hash):
-            matched = acct
-            break
-        if acct.previous_api_key_hash and acct.key_rotated_at:
-            rotated_at = (
-                acct.key_rotated_at
-                if acct.key_rotated_at.tzinfo is not None
-                else acct.key_rotated_at.replace(tzinfo=timezone.utc)
-            )
-            if (now - rotated_at) < grace and _check_api_key(
-                agent_api_key, acct.previous_api_key_hash
-            ):
-                matched = acct
-                break
-
+    matched = next(
+        (acct for acct in accounts if _key_matches(acct, agent_api_key, now)), None
+    )
     if matched is None:
         raise HTTPException(status_code=401, detail="Invalid agent API key")
 
@@ -204,7 +275,9 @@ def attach_developer_id_by_key(
             detail="developer_id already claimed by another account",
         )
 
-    return claim_developer_id_for(session, caller, matched.developer_id)
+    return claim_developer_id_for(
+        session, caller, matched.developer_id, prover=matched
+    )
 
 
 def detach_developer_id(
