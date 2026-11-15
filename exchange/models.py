@@ -218,6 +218,27 @@ class DeveloperIdOwner(Base):
     )
 
 
+class DeveloperIdAuditEvent(Base):
+    """Append-only trail of operator overrides on developer_id ownership. Never stores keys."""
+
+    __tablename__ = "developer_id_audit_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    developer_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    previous_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    previous_owner_account_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True
+    )
+    new_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    new_owner_account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Balance(Base):
     __tablename__ = "balances"
 

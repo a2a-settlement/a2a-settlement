@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from exchange.config import settings
-from exchange.models import Account, DeveloperIdOwner
+from exchange.models import Account, DeveloperIdAuditEvent, DeveloperIdOwner
 
 
 def assert_controls_developer_id(
@@ -299,6 +299,61 @@ def detach_developer_id(
     session.add(row)
     session.flush()
     return row
+
+
+def admin_bind_developer_id(
+    session: Session,
+    actor: Account,
+    developer_id: str,
+    owner_account_id: str,
+    reason: str,
+) -> tuple[DeveloperIdOwner, DeveloperIdAuditEvent]:
+    """Operator override: bind developer_id to owner_account_id regardless of status.
+
+    Writes exactly one audit event. Rejects a no-op rebind to the same owner with 409.
+    """
+    reason = reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="reason is required")
+    target = session.execute(
+        select(Account).where(Account.id == owner_account_id)
+    ).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target owner account not found")
+
+    row = session.execute(
+        select(DeveloperIdOwner).where(DeveloperIdOwner.developer_id == developer_id)
+    ).scalar_one_or_none()
+    previous_status = row.status if row is not None else None
+    previous_owner = row.owner_account_id if row is not None else None
+    if previous_status == "claimed" and previous_owner == target.id:
+        raise HTTPException(
+            status_code=409,
+            detail="developer_id is already bound to this owner",
+        )
+
+    now = datetime.now(timezone.utc)
+    if row is None:
+        row = DeveloperIdOwner(developer_id=developer_id, status="claimed")
+    row.status = "claimed"
+    row.owner_account_id = target.id
+    row.claimed_at = now
+    session.add(row)
+
+    event = DeveloperIdAuditEvent(
+        developer_id=developer_id,
+        action="admin_bind",
+        actor_account_id=actor.id,
+        previous_status=previous_status,
+        previous_owner_account_id=previous_owner,
+        new_status="claimed",
+        new_owner_account_id=target.id,
+        reason=reason,
+        created_at=now,
+    )
+    session.add(event)
+    session.flush()
+    return row, event
 
 
 def ensure_legacy_open(session: Session, developer_id: str) -> None:

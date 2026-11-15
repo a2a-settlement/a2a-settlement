@@ -15,6 +15,7 @@ from exchange.models import Account, Balance, DeveloperIdOwner, GatewayClaim, Tr
 from exchange.ratelimit import check_register_rate_limit
 from exchange.schemas import (
     AccountResponse,
+    AdminBindDeveloperIdRequest,
     AgentCardResponse,
     AttachDeveloperIdRequest,
     ClaimListResponse,
@@ -40,6 +41,7 @@ from exchange.identity.issuer_registry import IssuerRegistry
 from exchange.identity.models import AgentCardModel
 from exchange.identity.vc_verifier import VCVerifier
 from exchange.ownership import (
+    admin_bind_developer_id,
     assert_controls_developer_id,
     assert_registration_allowed,
     attach_developer_id_by_key,
@@ -481,6 +483,40 @@ def detach_developer_id_route(
         "developer_id": row.developer_id,
         "status": row.status,
     }
+
+
+@router.post("/admin/developer-ids/{developer_id}/bind", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def admin_bind_developer_id_route(
+    request: Request,
+    developer_id: str,
+    req: AdminBindDeveloperIdRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Bind or rebind a developer_id to an owner account (operator-only dispute override)."""
+    if current.get("status") != "operator":
+        raise HTTPException(
+            status_code=403,
+            detail="Only the exchange operator can bind developer IDs",
+        )
+    with session.begin():
+        actor = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if actor is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row, event = admin_bind_developer_id(
+            session, actor, developer_id, req.owner_account_id, req.reason
+        )
+        return {
+            "developer_id": row.developer_id,
+            "owner_account_id": row.owner_account_id,
+            "status": row.status,
+            "previous_status": event.previous_status,
+            "previous_owner_account_id": event.previous_owner_account_id,
+            "audit_event_id": event.id,
+        }
 
 
 # Static path. Must be registered before /accounts/{account_id}/suspend or

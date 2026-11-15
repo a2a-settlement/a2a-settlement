@@ -864,10 +864,26 @@ def test_managed_list_includes_gateway_claims_and_gateway_caller_agents(
         flat_gw = json.dumps(gw_list)
         assert "api_key" not in flat_gw
 
-# --- legacy_open: oldest-agent claim and member-key registration ---
+# --- legacy_open: oldest-agent claim, member-key registration, admin override ---
 
 LEGACY_DEV = "dev-legacy-open-rules"
 LEGACY_DID = "did:web:legacy.open.rules"
+
+
+def _promote_to_operator(account_id: str) -> None:
+    from sqlalchemy import select
+
+    from exchange.models import Account
+
+    session = _db_session()
+    try:
+        with session.begin():
+            acct = session.execute(
+                select(Account).where(Account.id == account_id)
+            ).scalar_one()
+            acct.status = "operator"
+    finally:
+        session.close()
 
 
 def _delete_owner_row(developer_id: str) -> None:
@@ -896,6 +912,36 @@ def _insert_legacy_open_row(developer_id: str) -> None:
             session.add(DeveloperIdOwner(developer_id=developer_id, status="legacy_open"))
     finally:
         session.close()
+
+
+def _audit_rows(developer_id: str) -> list[dict]:
+    from sqlalchemy import select
+
+    from exchange.models import DeveloperIdAuditEvent
+
+    session = _db_session()
+    try:
+        with session.begin():
+            rows = (
+                session.execute(
+                    select(DeveloperIdAuditEvent)
+                    .where(DeveloperIdAuditEvent.developer_id == developer_id)
+                    .order_by(DeveloperIdAuditEvent.created_at)
+                )
+                .scalars()
+                .all()
+            )
+            cols = [c.name for c in DeveloperIdAuditEvent.__table__.columns]
+            return [{c: getattr(r, c) for c in cols} for r in rows]
+    finally:
+        session.close()
+
+
+def _bind(client: TestClient, api_key: str | None, developer_id: str, body: dict):
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    return client.post(
+        f"/v1/admin/developer-ids/{developer_id}/bind", headers=headers, json=body
+    )
 
 
 def test_legacy_open_claim_requires_oldest_agent_key(client: TestClient):
@@ -1085,3 +1131,127 @@ def test_missing_owner_row_keeps_first_claimer_wins(client: TestClient):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["owner_account_id"] == b["account"]["id"]
+
+
+def test_admin_bind_overrides_and_writes_one_audit_event(client: TestClient):
+    oldest = _register(client, "BindOldest", LEGACY_DEV)
+    newer = _register(client, "BindNewer", LEGACY_DEV, owner_api_key=oldest["api_key"])
+    admin = _register(client, "BindAdmin", OTHER_DEV)
+    _promote_to_operator(admin["account"]["id"])
+    keys = [oldest["api_key"], newer["api_key"], admin["api_key"]]
+
+    resp = _bind(
+        client,
+        admin["api_key"],
+        LEGACY_DEV,
+        {"owner_account_id": newer["account"]["id"], "reason": "ticket 48: verified owner"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["developer_id"] == LEGACY_DEV
+    assert body["owner_account_id"] == newer["account"]["id"]
+    assert body["status"] == "claimed"
+    assert body["previous_status"] == "legacy_open"
+    assert body["previous_owner_account_id"] is None
+    assert _owner_row(LEGACY_DEV) == ("claimed", newer["account"]["id"])
+
+    rows = _audit_rows(LEGACY_DEV)
+    assert len(rows) == 1
+    ev = rows[0]
+    assert ev["id"] == body["audit_event_id"]
+    assert ev["action"] == "admin_bind"
+    assert ev["actor_account_id"] == admin["account"]["id"]
+    assert ev["previous_status"] == "legacy_open"
+    assert ev["previous_owner_account_id"] is None
+    assert ev["new_status"] == "claimed"
+    assert ev["new_owner_account_id"] == newer["account"]["id"]
+    assert ev["reason"] == "ticket 48: verified owner"
+    assert ev["created_at"] is not None
+
+    listed = _claim_via_list(client, newer["api_key"])
+    assert LEGACY_DEV in listed["developer_ids"]
+
+    same = _bind(
+        client,
+        admin["api_key"],
+        LEGACY_DEV,
+        {"owner_account_id": newer["account"]["id"], "reason": "repeat"},
+    )
+    assert same.status_code == 409
+    assert len(_audit_rows(LEGACY_DEV)) == 1
+
+    rebind = _bind(
+        client,
+        admin["api_key"],
+        LEGACY_DEV,
+        {"owner_account_id": oldest["account"]["id"], "reason": "dispute reversed"},
+    )
+    assert rebind.status_code == 200, rebind.text
+    assert rebind.json()["previous_status"] == "claimed"
+    assert rebind.json()["previous_owner_account_id"] == newer["account"]["id"]
+    rows = _audit_rows(LEGACY_DEV)
+    assert len(rows) == 2
+
+    missing_target = _bind(
+        client,
+        admin["api_key"],
+        LEGACY_DEV,
+        {"owner_account_id": "no-such-account", "reason": "x"},
+    )
+    assert missing_target.status_code == 404
+    no_reason = _bind(
+        client, admin["api_key"], LEGACY_DEV, {"owner_account_id": newer["account"]["id"]}
+    )
+    assert no_reason.status_code == 422
+    blank_reason = _bind(
+        client,
+        admin["api_key"],
+        LEGACY_DEV,
+        {"owner_account_id": newer["account"]["id"], "reason": "   "},
+    )
+    assert blank_reason.status_code == 422
+    assert len(_audit_rows(LEGACY_DEV)) == 2
+
+    from exchange.models import DeveloperIdAuditEvent
+
+    assert not any("key" in c.name for c in DeveloperIdAuditEvent.__table__.columns)
+    flat = json.dumps(rows, default=str)
+    assert "ate_" not in flat
+    for k in keys:
+        assert k not in flat
+    for r in (resp, same, rebind):
+        for k in keys:
+            assert k not in r.text
+
+
+def test_admin_bind_unknown_developer_id_creates_claimed_row(client: TestClient):
+    owner = _register(client, "BindFreshOwner", OTHER_DEV)
+    admin = _register(client, "BindFreshAdmin", SECOND_DEV)
+    _promote_to_operator(admin["account"]["id"])
+    fresh = "dev-admin-bound-fresh"
+
+    resp = _bind(
+        client,
+        admin["api_key"],
+        fresh,
+        {"owner_account_id": owner["account"]["id"], "reason": "pre-bind"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["previous_status"] is None
+    assert _owner_row(fresh) == ("claimed", owner["account"]["id"])
+    assert len(_audit_rows(fresh)) == 1
+
+
+def test_admin_bind_requires_operator(client: TestClient):
+    oldest = _register(client, "NoAdminOldest", LEGACY_DEV)
+    body = {"owner_account_id": oldest["account"]["id"], "reason": "self-serve attempt"}
+
+    denied = _bind(client, oldest["api_key"], LEGACY_DEV, body)
+    assert denied.status_code == 403
+    assert "operator" in denied.json()["detail"]
+
+    unauth = _bind(client, None, LEGACY_DEV, body)
+    assert unauth.status_code in (401, 403)
+
+    assert _audit_rows(LEGACY_DEV) == []
+    assert _owner_row(LEGACY_DEV) == ("legacy_open", None)

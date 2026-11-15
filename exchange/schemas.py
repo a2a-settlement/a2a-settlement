@@ -133,6 +133,11 @@ class AttachDeveloperIdRequest(BaseModel):
     agent_api_key: str = Field(default="", repr=False)
 
 
+class AdminBindDeveloperIdRequest(BaseModel):
+    owner_account_id: str = Field(..., min_length=1, max_length=36)
+    reason: str = Field(..., min_length=1, max_length=2000)
+
+
 # --- Gateway Claims ---
 
 
