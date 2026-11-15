@@ -347,6 +347,31 @@ def claim_developer_id_route(
     }
 
 
+# Static path. Must be registered before /accounts/{account_id}/suspend or
+# Starlette binds account_id="admin" and the operator route 404s.
+@router.post("/accounts/admin/suspend", response_model=SuspendResponse, tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def suspend_account(
+    request: Request,
+    req: SuspendRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> SuspendResponse:
+    if current.get("status") != "operator":
+        raise HTTPException(status_code=403, detail="Only the exchange operator can suspend accounts")
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == req.account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if acct.status == "operator":
+            raise HTTPException(status_code=400, detail="Cannot suspend an operator account")
+        acct.status = "suspended"
+        session.add(acct)
+
+    return SuspendResponse(account_id=acct.id, reason=req.reason)
+
+
 @router.post(
     "/accounts/{account_id}/suspend",
     response_model=SuspendResponse,
@@ -716,29 +741,6 @@ def rotate_did_key(
         "new_did_key": new_did_key,
         "status": "rotated",
     }
-
-
-@router.post("/accounts/admin/suspend", response_model=SuspendResponse, tags=["Accounts"])
-@limiter.limit(settings.rate_limit_authenticated)
-def suspend_account(
-    request: Request,
-    req: SuspendRequest,
-    current: dict = Depends(authenticate_bot),
-    session: Session = Depends(get_session),
-) -> SuspendResponse:
-    if current.get("status") != "operator":
-        raise HTTPException(status_code=403, detail="Only the exchange operator can suspend accounts")
-
-    with session.begin():
-        acct = session.execute(select(Account).where(Account.id == req.account_id)).scalar_one_or_none()
-        if acct is None:
-            raise HTTPException(status_code=404, detail="Account not found")
-        if acct.status == "operator":
-            raise HTTPException(status_code=400, detail="Cannot suspend an operator account")
-        acct.status = "suspended"
-        session.add(acct)
-
-    return SuspendResponse(account_id=acct.id, reason=req.reason)
 
 
 # ---------------------------------------------------------------------------
