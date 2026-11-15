@@ -96,6 +96,7 @@ class DirectoryAccountResponse(BaseModel):
     account_type: str = "agent"
     created_at: datetime | None = None
     gateway_claims: list["GatewayClaimInfo"] | None = None
+    is_test: bool = False
 
 
 class DirectoryResponse(BaseModel):

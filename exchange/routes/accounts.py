@@ -201,6 +201,7 @@ def _directory_account_response(
         account_type=acct.account_type,
         created_at=acct.created_at,
         gateway_claims=claim_info,
+        is_test=bool(acct.is_test),
     )
 
 
