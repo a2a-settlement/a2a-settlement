@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime, timezone
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import and_, func as sa_func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -896,12 +896,22 @@ def register_agent(
     card_body: dict,
     session: Session = Depends(get_session),
     verifier: VCVerifier = Depends(get_vc_verifier),
+    x_owner_api_key: str | None = Header(default=None),
 ) -> KYARegisterResponse:
     """Register an agent with a KYA-enhanced Agent Card.
 
     Accepts raw JSON so signature verification uses the exact bytes the
     agent signed, avoiding datetime re-serialization mismatches.
+
+    ``owner_api_key`` is accepted as a body field or ``X-Owner-Api-Key``
+    header and is stripped before the card is verified or stored. A claimed
+    ``developer_id`` (the card ``id``) requires the owning account's key.
     """
+    raw_owner_key = card_body.pop("owner_api_key", None) if isinstance(card_body, dict) else None
+    owner_api_key = raw_owner_key if isinstance(raw_owner_key, str) and raw_owner_key else None
+    if owner_api_key is None and isinstance(x_owner_api_key, str) and x_owner_api_key:
+        owner_api_key = x_owner_api_key
+
     try:
         card = AgentCardModel.model_validate(card_body)
     except Exception as exc:
@@ -941,6 +951,9 @@ def register_agent(
             dup_did = session.execute(select(Account.id).where(Account.did == card.id)).scalar_one_or_none()
             if dup_did is not None:
                 raise HTTPException(status_code=409, detail="An agent with this DID is already registered")
+
+        assert_registration_allowed(session, card.id, owner_api_key)
+        ensure_legacy_open(session, card.id)
 
         spend_limit = settings.default_daily_spend_limit if settings.default_daily_spend_limit > 0 else None
 

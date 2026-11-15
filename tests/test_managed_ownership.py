@@ -149,6 +149,8 @@ def test_managed_list_excludes_api_key_fields(client: TestClient):
 
 def test_claimed_developer_id_blocks_registration_without_owner_key(client: TestClient):
     owner = _register(client, "GateOwner", SHARED_DEV)
+    sibling = _register(client, "GateSibling", SHARED_DEV)
+    stranger = _register(client, "GateStranger", OTHER_DEV)
     _claim_via_list(client, owner["api_key"])
 
     denied = client.post(
@@ -161,6 +163,28 @@ def test_claimed_developer_id_blocks_registration_without_owner_key(client: Test
     )
     assert denied.status_code == 403
 
+    foreign_key = client.post(
+        "/v1/accounts/register",
+        json={
+            "bot_name": "GateForeignKey",
+            "developer_id": SHARED_DEV,
+            "owner_api_key": stranger["api_key"],
+            **_REG,
+        },
+    )
+    assert foreign_key.status_code == 403
+
+    sibling_key = client.post(
+        "/v1/accounts/register",
+        json={
+            "bot_name": "GateSiblingKey",
+            "developer_id": SHARED_DEV,
+            "owner_api_key": sibling["api_key"],
+            **_REG,
+        },
+    )
+    assert sibling_key.status_code == 403
+
     allowed = client.post(
         "/v1/accounts/register",
         json={
@@ -171,6 +195,51 @@ def test_claimed_developer_id_blocks_registration_without_owner_key(client: Test
         },
     )
     assert allowed.status_code == 201
+
+
+def test_register_agent_claimed_developer_id_blocks_non_owner(client: TestClient):
+    """Card registration uses card.id as developer_id and must hit the same gate."""
+    claimed_id = "did:web:claimed.owner"
+    owner = _register(client, "CardGateOwner", claimed_id)
+    stranger = _register(client, "CardGateStranger", "did:web:other.stranger")
+    _claim_via_list(client, owner["api_key"])
+
+    fresh = client.post(
+        "/v1/accounts/register-agent",
+        json=_sample_card(name="CardGateFresh", agent_id="did:web:fresh.unclaimed"),
+    )
+    assert fresh.status_code == 201, fresh.text
+
+    denied = client.post(
+        "/v1/accounts/register-agent",
+        json=_sample_card(name="CardGateBlocked", agent_id=claimed_id),
+    )
+    assert denied.status_code == 403
+
+    foreign = client.post(
+        "/v1/accounts/register-agent",
+        json={
+            **_sample_card(name="CardGateForeign", agent_id=claimed_id),
+            "owner_api_key": stranger["api_key"],
+        },
+    )
+    assert foreign.status_code == 403
+
+    allowed = client.post(
+        "/v1/accounts/register-agent",
+        json={
+            **_sample_card(name="CardGateAllowed", agent_id=claimed_id),
+            "owner_api_key": owner["api_key"],
+        },
+        headers={"X-Owner-Api-Key": owner["api_key"]},
+    )
+    assert allowed.status_code == 201, allowed.text
+    account_id = allowed.json()["account"]["id"]
+    stored = client.get(f"/v1/accounts/{account_id}/card")
+    assert stored.status_code == 200
+    flat = stored.text
+    assert "owner_api_key" not in flat
+    assert owner["api_key"] not in flat
 
 
 def test_multi_id_attach_and_managed_list(client: TestClient):
