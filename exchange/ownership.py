@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import bcrypt
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from exchange.config import settings
 from exchange.models import Account, DeveloperIdOwner
 
 
@@ -82,8 +83,9 @@ def grandfather_legacy_open(session: Session) -> int:
     return added
 
 
-def claim_developer_id(session: Session, caller: Account) -> DeveloperIdOwner:
-    developer_id = caller.developer_id
+def claim_developer_id_for(
+    session: Session, caller: Account, developer_id: str
+) -> DeveloperIdOwner:
     row = session.execute(
         select(DeveloperIdOwner).where(DeveloperIdOwner.developer_id == developer_id)
     ).scalar_one_or_none()
@@ -116,6 +118,99 @@ def claim_developer_id(session: Session, caller: Account) -> DeveloperIdOwner:
         )
 
     raise HTTPException(status_code=500, detail="Invalid developer_id ownership status")
+
+
+def claim_developer_id(session: Session, caller: Account) -> DeveloperIdOwner:
+    return claim_developer_id_for(session, caller, caller.developer_id)
+
+
+def try_claim_own_developer_id(
+    session: Session, caller: Account
+) -> DeveloperIdOwner | None:
+    """Auto-claim caller.developer_id if unclaimed, legacy_open, or owned by caller.
+
+    Does not raise 409 when caller.developer_id is already claimed by another account,
+    allowing GET /accounts/managed to list any other developer_ids owned by caller.
+    """
+    row = session.execute(
+        select(DeveloperIdOwner).where(
+            DeveloperIdOwner.developer_id == caller.developer_id
+        )
+    ).scalar_one_or_none()
+    if (
+        row is not None
+        and row.status == "claimed"
+        and row.owner_account_id != caller.id
+    ):
+        return None
+    return claim_developer_id_for(session, caller, caller.developer_id)
+
+
+def attach_developer_id_by_key(
+    session: Session, caller: Account, agent_api_key: str
+) -> DeveloperIdOwner:
+    """Prove control of an agent via its API key and claim its developer_id for caller."""
+    if (
+        not agent_api_key
+        or not isinstance(agent_api_key, str)
+        or not agent_api_key.startswith("ate_")
+    ):
+        raise HTTPException(status_code=401, detail="Invalid agent API key")
+
+    accounts = (
+        session.execute(
+            select(Account).where(
+                Account.status.in_(("active", "suspended", "operator"))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    grace = timedelta(minutes=settings.key_rotation_grace_minutes)
+
+    matched: Account | None = None
+    for acct in accounts:
+        if _check_api_key(agent_api_key, acct.api_key_hash):
+            matched = acct
+            break
+        if acct.previous_api_key_hash and acct.key_rotated_at:
+            rotated_at = (
+                acct.key_rotated_at
+                if acct.key_rotated_at.tzinfo is not None
+                else acct.key_rotated_at.replace(tzinfo=timezone.utc)
+            )
+            if (now - rotated_at) < grace and _check_api_key(
+                agent_api_key, acct.previous_api_key_hash
+            ):
+                matched = acct
+                break
+
+    if matched is None:
+        raise HTTPException(status_code=401, detail="Invalid agent API key")
+
+    return claim_developer_id_for(session, caller, matched.developer_id)
+
+
+def detach_developer_id(
+    session: Session, caller: Account, developer_id: str
+) -> DeveloperIdOwner:
+    """Release a claimed non-primary developer_id back to legacy_open."""
+    assert_controls_developer_id(session, caller.id, developer_id)
+    if developer_id == caller.developer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot detach your primary developer ID",
+        )
+    row = session.execute(
+        select(DeveloperIdOwner).where(DeveloperIdOwner.developer_id == developer_id)
+    ).scalar_one()
+    row.status = "legacy_open"
+    row.owner_account_id = None
+    row.claimed_at = None
+    session.add(row)
+    session.flush()
+    return row
 
 
 def ensure_legacy_open(session: Session, developer_id: str) -> None:

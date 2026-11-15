@@ -129,6 +129,10 @@ class RotateKeyResponse(BaseModel):
     grace_period_minutes: int
 
 
+class AttachDeveloperIdRequest(BaseModel):
+    agent_api_key: str = Field(default="", repr=False)
+
+
 # --- Gateway Claims ---
 
 

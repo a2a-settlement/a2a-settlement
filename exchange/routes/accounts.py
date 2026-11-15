@@ -5,17 +5,18 @@ from datetime import datetime, timezone
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import and_, func as sa_func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func as sa_func, or_, select
+from sqlalchemy.orm import Session, joinedload
 
 from exchange.auth import authenticate_bot, authenticate_bot_optional
 from exchange.config import get_session, settings
 from exchange.ratelimit import limiter
-from exchange.models import Account, Balance, GatewayClaim, Transaction
+from exchange.models import Account, Balance, DeveloperIdOwner, GatewayClaim, Transaction
 from exchange.ratelimit import check_register_rate_limit
 from exchange.schemas import (
     AccountResponse,
     AgentCardResponse,
+    AttachDeveloperIdRequest,
     ClaimListResponse,
     ClaimRequest,
     ClaimResponse,
@@ -41,8 +42,11 @@ from exchange.identity.vc_verifier import VCVerifier
 from exchange.ownership import (
     assert_controls_developer_id,
     assert_registration_allowed,
+    attach_developer_id_by_key,
     claim_developer_id,
+    detach_developer_id,
     ensure_legacy_open,
+    try_claim_own_developer_id,
 )
 from exchange.principal_resolver import (
     get_or_create_principal,
@@ -284,6 +288,29 @@ def directory(
     )
 
 
+def _serialize_managed_agent(b: Account, claims: list[GatewayClaim]) -> dict:
+    return {
+        "id": b.id,
+        "bot_name": b.bot_name,
+        "status": b.status,
+        "developer_id": b.developer_id,
+        "reputation": float(b.reputation),
+        "created_at": b.created_at,
+        "last_activity_at": b.updated_at or b.created_at,
+        "is_test": bool(b.is_test),
+        "has_agent_card": bool(b.agent_card_json is not None),
+        "gateway_claims": [
+            {
+                "gateway_id": c.gateway_id,
+                "gateway_name": c.gateway.bot_name if c.gateway else "",
+                "verified": bool(c.verified),
+                "claimed_at": c.claimed_at,
+            }
+            for c in claims
+        ],
+    }
+
+
 @router.get("/accounts/managed", tags=["Accounts"])
 @limiter.limit(settings.rate_limit_authenticated)
 def list_managed_accounts(
@@ -297,30 +324,92 @@ def list_managed_accounts(
         ).scalar_one_or_none()
         if caller is None:
             raise HTTPException(status_code=404, detail="Account not found")
-        claim_developer_id(session, caller)
+
+        try_claim_own_developer_id(session, caller)
         developer_id = caller.developer_id
-        bots = session.execute(
-            select(Account)
-            .where(Account.developer_id == developer_id)
-            .where(Account.account_type != "gateway")
-            .order_by(Account.created_at)
-        ).scalars().all()
+        caller_account_type = caller.account_type
+
+        claimed_dev_ids = sorted(
+            session.execute(
+                select(DeveloperIdOwner.developer_id).where(
+                    DeveloperIdOwner.owner_account_id == caller.id,
+                    DeveloperIdOwner.status == "claimed",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        owned_dev_set = set(claimed_dev_ids)
+
+        if claimed_dev_ids:
+            bots = (
+                session.execute(
+                    select(Account)
+                    .where(Account.developer_id.in_(claimed_dev_ids))
+                    .where(Account.account_type != "gateway")
+                    .order_by(Account.created_at)
+                )
+                .scalars()
+                .all()
+            )
+        else:
+            bots = []
+
+        gw_agents: list[Account] = []
+        if caller_account_type == "gateway":
+            gw_agents = (
+                session.execute(
+                    select(Account)
+                    .join(GatewayClaim, GatewayClaim.account_id == Account.id)
+                    .where(
+                        GatewayClaim.gateway_id == caller.id,
+                        GatewayClaim.status == "active",
+                    )
+                    .order_by(Account.created_at)
+                )
+                .scalars()
+                .all()
+            )
+
+        all_agent_ids = list({b.id for b in bots} | {a.id for a in gw_agents})
+        claims_by_agent: dict[str, list[GatewayClaim]] = {}
+        if all_agent_ids:
+            claims_q = (
+                select(GatewayClaim)
+                .options(joinedload(GatewayClaim.gateway))
+                .where(
+                    GatewayClaim.account_id.in_(all_agent_ids),
+                    GatewayClaim.status == "active",
+                )
+                .order_by(GatewayClaim.claimed_at)
+            )
+            for c in session.execute(claims_q).scalars().all():
+                claims_by_agent.setdefault(c.account_id, []).append(c)
+
         payload = [
-            {
-                "id": b.id,
-                "bot_name": b.bot_name,
-                "status": b.status,
-                "developer_id": b.developer_id,
-                "reputation": float(b.reputation),
-                "created_at": b.created_at,
-                "is_test": bool(b.is_test),
-            }
+            _serialize_managed_agent(b, claims_by_agent.get(b.id, []))
             for b in bots
+        ]
+        gw_payload = [
+            _serialize_managed_agent(
+                a,
+                claims_by_agent.get(a.id, [])
+                if a.developer_id in owned_dev_set
+                else [
+                    c
+                    for c in claims_by_agent.get(a.id, [])
+                    if c.verified or c.gateway_id == caller.id
+                ],
+            )
+            for a in gw_agents
         ]
 
     return {
         "developer_id": developer_id,
+        "developer_ids": claimed_dev_ids,
+        "caller_account_type": caller_account_type,
         "bots": payload,
+        "gateway_claimed_agents": gw_payload,
         "count": len(payload),
     }
 
@@ -343,6 +432,53 @@ def claim_developer_id_route(
     return {
         "developer_id": row.developer_id,
         "owner_account_id": row.owner_account_id,
+        "status": row.status,
+    }
+
+
+# Static developer-id paths. Must be registered before /accounts/{account_id}
+# so Starlette routing never shadows them.
+@router.post("/accounts/developer-ids/attach", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def attach_developer_id_route(
+    request: Request,
+    req: AttachDeveloperIdRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row = attach_developer_id_by_key(session, caller, req.agent_api_key)
+
+    return {
+        "developer_id": row.developer_id,
+        "owner_account_id": row.owner_account_id,
+        "status": row.status,
+    }
+
+
+@router.delete("/accounts/developer-ids/{developer_id}", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def detach_developer_id_route(
+    request: Request,
+    developer_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row = detach_developer_id(session, caller, developer_id)
+
+    return {
+        "developer_id": row.developer_id,
         "status": row.status,
     }
 
@@ -896,8 +1032,12 @@ def update_agent_card(
     session: Session = Depends(get_session),
     verifier: VCVerifier = Depends(get_vc_verifier),
 ) -> AgentCardResponse:
-    if current["id"] != account_id:
-        raise HTTPException(status_code=403, detail="Can only update your own Agent Card")
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if current["id"] != account_id:
+            assert_controls_developer_id(session, current["id"], acct.developer_id)
 
     try:
         card = AgentCardModel.model_validate(card_body)
@@ -930,6 +1070,58 @@ def update_agent_card(
         kya_level_verified=acct.kya_level_verified,
         card=acct.agent_card_json,
     )
+
+
+@router.get("/accounts/{account_id}/settlements", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def get_account_settlements(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        acct = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if current["id"] != account_id:
+            assert_controls_developer_id(session, current["id"], acct.developer_id)
+
+        txs = (
+            session.execute(
+                select(Transaction)
+                .where(
+                    or_(
+                        Transaction.from_account == account_id,
+                        Transaction.to_account == account_id,
+                    ),
+                    Transaction.tx_type != "mint",
+                )
+                .order_by(Transaction.created_at.desc())
+                .limit(10)
+            )
+            .scalars()
+            .all()
+        )
+        settlements = [
+            {
+                "id": t.id,
+                "tx_type": t.tx_type,
+                "amount": int(t.amount),
+                "direction": "in" if t.to_account == account_id else "out",
+                "escrow_id": getattr(t, "escrow_id", None),
+                "description": t.description,
+                "created_at": t.created_at,
+            }
+            for t in txs
+        ]
+
+    return {
+        "account_id": account_id,
+        "settlements": settlements,
+    }
 
 
 @router.post("/accounts/admin/register-oracle", tags=["Accounts"])

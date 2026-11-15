@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import importlib
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +15,27 @@ _REG = {
 
 SHARED_DEV = "dev-shared-ownership"
 OTHER_DEV = "dev-other-ownership"
+SECOND_DEV = "dev-second-ownership"
+
+
+def _sample_card(name: str = "ManagedAgent", agent_id: str = "did:web:agent.test") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "protocol_version": "2026.1",
+        "name": name,
+        "id": agent_id,
+        "description": "Managed agent card",
+        "kya_level": 0,
+        "identity": {"type": "api_key"},
+        "attestations": [],
+        "settlement": {
+            "supported_methods": ["escrow-v1"],
+            "exchange_url": "https://exchange.test",
+        },
+        "capabilities": {"skills": ["research", "analysis"]},
+        "policies": {},
+        "metadata": {"created": now, "updated": now},
+    }
 
 
 def _register(client: TestClient, bot_name: str, developer_id: str, **extra) -> dict:
@@ -147,3 +171,485 @@ def test_claimed_developer_id_blocks_registration_without_owner_key(client: Test
         },
     )
     assert allowed.status_code == 201
+
+
+def test_multi_id_attach_and_managed_list(client: TestClient):
+    owner = _register(client, "PrimaryOwner", SHARED_DEV)
+    ext_a = _register(client, "SecondaryAgentA", SECOND_DEV)
+    ext_b = _register(client, "SecondaryAgentB", SECOND_DEV, is_test=True)
+
+    owner_hdr = {"Authorization": f"Bearer {owner['api_key']}"}
+
+    # Invalid keys rejected with 401 and never echoed
+    bad_key = "ate_000000000000000000000000deadbeef"
+    bad_resp = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers=owner_hdr,
+        json={"agent_api_key": bad_key},
+    )
+    assert bad_resp.status_code == 401
+    assert bad_key not in bad_resp.text
+
+    non_ate_key = "secret_not_an_ate_key"
+    non_ate_resp = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers=owner_hdr,
+        json={"agent_api_key": non_ate_key},
+    )
+    assert non_ate_resp.status_code == 401
+    assert non_ate_key not in non_ate_resp.text
+
+    # Valid attach binds SECOND_DEV to owner
+    attach_resp = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers=owner_hdr,
+        json={"agent_api_key": ext_a["api_key"]},
+    )
+    assert attach_resp.status_code == 200, attach_resp.text
+    assert ext_a["api_key"] not in attach_resp.text
+    assert attach_resp.json() == {
+        "developer_id": SECOND_DEV,
+        "owner_account_id": owner["account"]["id"],
+        "status": "claimed",
+    }
+
+    # Re-attaching with sibling key is idempotent
+    reattach = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers=owner_hdr,
+        json={"agent_api_key": ext_b["api_key"]},
+    )
+    assert reattach.status_code == 200
+    assert reattach.json()["status"] == "claimed"
+
+    # Managed listing returns both developer IDs and agents from both groups
+    listed = _claim_via_list(client, owner["api_key"])
+    assert listed["developer_id"] == SHARED_DEV
+    assert listed["developer_ids"] == sorted([SHARED_DEV, SECOND_DEV])
+    assert listed["caller_account_type"] == "agent"
+    assert listed["gateway_claimed_agents"] == []
+    assert listed["count"] == 3
+
+    by_id = {b["id"]: b for b in listed["bots"]}
+    assert set(by_id.keys()) == {
+        owner["account"]["id"],
+        ext_a["account"]["id"],
+        ext_b["account"]["id"],
+    }
+    for bot in listed["bots"]:
+        assert bot["has_agent_card"] is False
+        assert bot["last_activity_at"] is not None
+        assert bot["gateway_claims"] == []
+        assert "api_key" not in bot
+        assert "api_key_hash" not in bot
+        assert "previous_api_key_hash" not in bot
+
+    flat = json.dumps(listed)
+    assert ext_a["api_key"] not in flat
+    assert owner["api_key"] not in flat
+
+
+def test_attach_suspended_agent_key_succeeds(client: TestClient):
+    # First owner suspends a sibling, detaches the developer_id, then new owner attaches via suspended agent's key
+    first_owner = _register(client, "TempOwner", SHARED_DEV)
+    sec_agent = _register(client, "SuspAgent", SECOND_DEV)
+    first_hdr = {"Authorization": f"Bearer {first_owner['api_key']}"}
+
+    _claim_via_list(client, first_owner["api_key"])
+    r = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers=first_hdr,
+        json={"agent_api_key": sec_agent["api_key"]},
+    )
+    assert r.status_code == 200
+
+    susp = client.post(
+        f"/v1/accounts/{sec_agent['account']['id']}/suspend",
+        headers=first_hdr,
+    )
+    assert susp.status_code == 200
+
+    det = client.delete(
+        f"/v1/accounts/developer-ids/{SECOND_DEV}",
+        headers=first_hdr,
+    )
+    assert det.status_code == 200
+
+    new_owner = _register(client, "NewOwner", OTHER_DEV)
+    reclaim = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers={"Authorization": f"Bearer {new_owner['api_key']}"},
+        json={"agent_api_key": sec_agent["api_key"]},
+    )
+    assert reclaim.status_code == 200
+    assert reclaim.json()["owner_account_id"] == new_owner["account"]["id"]
+
+
+def test_attach_cross_owner_conflict_409(client: TestClient):
+    owner_a = _register(client, "ConflictOwnerA", SHARED_DEV)
+    sibling_a = _register(client, "ConflictSiblingA", SHARED_DEV)
+    owner_b = _register(client, "ConflictOwnerB", OTHER_DEV)
+
+    _claim_via_list(client, owner_a["api_key"])
+
+    conflict = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers={"Authorization": f"Bearer {owner_b['api_key']}"},
+        json={"agent_api_key": sibling_a["api_key"]},
+    )
+    assert conflict.status_code == 409
+    assert sibling_a["api_key"] not in conflict.text
+
+
+def test_detach_developer_id_and_cannot_detach_primary(client: TestClient):
+    owner = _register(client, "DetachOwner", SHARED_DEV)
+    sec = _register(client, "DetachSecondary", SECOND_DEV)
+    outsider = _register(client, "DetachOutsider", OTHER_DEV)
+
+    owner_hdr = {"Authorization": f"Bearer {owner['api_key']}"}
+    outsider_hdr = {"Authorization": f"Bearer {outsider['api_key']}"}
+
+    _claim_via_list(client, owner["api_key"])
+    attach = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers=owner_hdr,
+        json={"agent_api_key": sec["api_key"]},
+    )
+    assert attach.status_code == 200
+
+    # Cross-owner cannot detach
+    cross_del = client.delete(
+        f"/v1/accounts/developer-ids/{SECOND_DEV}",
+        headers=outsider_hdr,
+    )
+    assert cross_del.status_code == 403
+
+    # Owner cannot detach primary developer_id
+    primary_del = client.delete(
+        f"/v1/accounts/developer-ids/{SHARED_DEV}",
+        headers=owner_hdr,
+    )
+    assert primary_del.status_code == 400
+    assert primary_del.json()["detail"] == "Cannot detach your primary developer ID"
+
+    # Detaching secondary resets to legacy_open and removes from managed listing
+    ok_del = client.delete(
+        f"/v1/accounts/developer-ids/{SECOND_DEV}",
+        headers=owner_hdr,
+    )
+    assert ok_del.status_code == 200
+    assert ok_del.json() == {
+        "developer_id": SECOND_DEV,
+        "status": "legacy_open",
+    }
+
+    listed = _claim_via_list(client, owner["api_key"])
+    assert listed["developer_ids"] == [SHARED_DEV]
+    assert {b["id"] for b in listed["bots"]} == {owner["account"]["id"]}
+
+    # Owner no longer controls detached agent
+    susp = client.post(
+        f"/v1/accounts/{sec['account']['id']}/suspend",
+        headers=owner_hdr,
+    )
+    assert susp.status_code == 403
+
+
+def test_managed_list_when_primary_dev_id_claimed_by_another(client: TestClient):
+    first = _register(client, "SharedFirst", SHARED_DEV)
+    second = _register(client, "SharedSecond", SHARED_DEV)
+    extra = _register(client, "ExtraOwned", SECOND_DEV)
+
+    _claim_via_list(client, first["api_key"])
+
+    attach = client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers={"Authorization": f"Bearer {second['api_key']}"},
+        json={"agent_api_key": extra["api_key"]},
+    )
+    assert attach.status_code == 200
+
+    listed = _claim_via_list(client, second["api_key"])
+    assert listed["developer_id"] == SHARED_DEV
+    assert listed["developer_ids"] == [SECOND_DEV]
+    assert {b["id"] for b in listed["bots"]} == {extra["account"]["id"]}
+
+
+def test_put_card_controller_scoped_and_has_agent_card_flag(client: TestClient):
+    owner = _register(client, "CardOwner", SHARED_DEV)
+    sibling = _register(client, "CardSibling", SHARED_DEV)
+    attached = _register(client, "CardAttached", SECOND_DEV)
+    outsider = _register(client, "CardOutsider", OTHER_DEV)
+
+    owner_hdr = {"Authorization": f"Bearer {owner['api_key']}"}
+    outsider_hdr = {"Authorization": f"Bearer {outsider['api_key']}"}
+
+    _claim_via_list(client, owner["api_key"])
+    client.post(
+        "/v1/accounts/developer-ids/attach",
+        headers=owner_hdr,
+        json={"agent_api_key": attached["api_key"]},
+    )
+
+    # Missing account -> 404
+    missing = client.put(
+        "/v1/accounts/nonexistent-account/card",
+        headers=owner_hdr,
+        json=_sample_card("Missing"),
+    )
+    assert missing.status_code == 404
+
+    # Cross-owner -> 403
+    denied_out = client.put(
+        f"/v1/accounts/{outsider['account']['id']}/card",
+        headers=owner_hdr,
+        json=_sample_card("CardOutsider"),
+    )
+    assert denied_out.status_code == 403
+
+    denied_in = client.put(
+        f"/v1/accounts/{sibling['account']['id']}/card",
+        headers=outsider_hdr,
+        json=_sample_card("CardSibling"),
+    )
+    assert denied_in.status_code == 403
+
+    # Owner can publish card on sibling under primary developer_id
+    sib_card = _sample_card("CardSibling", "did:web:sibling.test")
+    ok_sib = client.put(
+        f"/v1/accounts/{sibling['account']['id']}/card",
+        headers=owner_hdr,
+        json=sib_card,
+    )
+    assert ok_sib.status_code == 200, ok_sib.text
+    assert ok_sib.json()["agent_id"] == sibling["account"]["id"]
+    assert ok_sib.json()["card"]["name"] == "CardSibling"
+
+    # Owner can publish card on agent under attached developer_id
+    att_card = _sample_card("CardAttached", "did:web:attached.test")
+    ok_att = client.put(
+        f"/v1/accounts/{attached['account']['id']}/card",
+        headers=owner_hdr,
+        json=att_card,
+    )
+    assert ok_att.status_code == 200, ok_att.text
+
+    # Self-update still works without claiming developer_id
+    self_ok = client.put(
+        f"/v1/accounts/{outsider['account']['id']}/card",
+        headers=outsider_hdr,
+        json=_sample_card("CardOutsider", "did:web:outsider.test"),
+    )
+    assert self_ok.status_code == 200
+
+    # Invalid card schema -> 422 for authorized caller
+    bad_schema = client.put(
+        f"/v1/accounts/{sibling['account']['id']}/card",
+        headers=owner_hdr,
+        json={"invalid": True},
+    )
+    assert bad_schema.status_code == 422
+
+    # Managed listing reflects has_agent_card accurately
+    listed = _claim_via_list(client, owner["api_key"])
+    cards_by_id = {b["id"]: b["has_agent_card"] for b in listed["bots"]}
+    assert cards_by_id[owner["account"]["id"]] is False
+    assert cards_by_id[sibling["account"]["id"]] is True
+    assert cards_by_id[attached["account"]["id"]] is True
+
+
+def test_get_settlements_controller_scoped_and_excludes_mint(client: TestClient):
+    owner = _register(client, "SettleOwner", SHARED_DEV)
+    sibling = _register(client, "SettleSibling", SHARED_DEV)
+    counterparty = _register(client, "SettleCounterparty", OTHER_DEV)
+
+    owner_hdr = {"Authorization": f"Bearer {owner['api_key']}"}
+    sib_hdr = {"Authorization": f"Bearer {sibling['api_key']}"}
+    cp_hdr = {"Authorization": f"Bearer {counterparty['api_key']}"}
+
+    _claim_via_list(client, owner["api_key"])
+
+    # 404 on unknown account
+    missing = client.get("/v1/accounts/no-such-account/settlements", headers=owner_hdr)
+    assert missing.status_code == 404
+
+    # 403 for cross-owner
+    forbidden = client.get(
+        f"/v1/accounts/{sibling['account']['id']}/settlements",
+        headers=cp_hdr,
+    )
+    assert forbidden.status_code == 403
+
+    forbidden_cp = client.get(
+        f"/v1/accounts/{counterparty['account']['id']}/settlements",
+        headers=owner_hdr,
+    )
+    assert forbidden_cp.status_code == 403
+
+    # Initially no non-mint transactions (starter mint is excluded)
+    empty = client.get(
+        f"/v1/accounts/{sibling['account']['id']}/settlements",
+        headers=owner_hdr,
+    )
+    assert empty.status_code == 200
+    assert empty.json() == {
+        "account_id": sibling["account"]["id"],
+        "settlements": [],
+    }
+
+    # Outbound escrow from sibling -> counterparty, released
+    esc_out = client.post(
+        "/v1/exchange/escrow",
+        headers=sib_hdr,
+        json={"provider_id": counterparty["account"]["id"], "amount": 20},
+    )
+    assert esc_out.status_code == 201, esc_out.text
+    esc_out_id = esc_out.json()["escrow_id"]
+    rel_out = client.post(
+        "/v1/exchange/release",
+        headers=sib_hdr,
+        json={"escrow_id": esc_out_id},
+    )
+    assert rel_out.status_code == 200, rel_out.text
+
+    # Inbound escrow from counterparty -> sibling, released
+    esc_in = client.post(
+        "/v1/exchange/escrow",
+        headers=cp_hdr,
+        json={"provider_id": sibling["account"]["id"], "amount": 15},
+    )
+    assert esc_in.status_code == 201, esc_in.text
+    esc_in_id = esc_in.json()["escrow_id"]
+    rel_in = client.post(
+        "/v1/exchange/release",
+        headers=cp_hdr,
+        json={"escrow_id": esc_in_id},
+    )
+    assert rel_in.status_code == 200, rel_in.text
+
+    # Owner and self both see non-mint settlements with direction & escrow_id
+    owner_view = client.get(
+        f"/v1/accounts/{sibling['account']['id']}/settlements",
+        headers=owner_hdr,
+    )
+    assert owner_view.status_code == 200
+    body = owner_view.json()
+    assert body["account_id"] == sibling["account"]["id"]
+    items = body["settlements"]
+    assert len(items) >= 2
+    assert len(items) <= 10
+    assert all(item["tx_type"] != "mint" for item in items)
+
+    directions = {item["direction"] for item in items}
+    assert "in" in directions
+    assert "out" in directions
+    escrow_ids = {item["escrow_id"] for item in items if item["escrow_id"]}
+    assert esc_out_id in escrow_ids
+    assert esc_in_id in escrow_ids
+    for item in items:
+        assert set(item.keys()) == {
+            "id",
+            "tx_type",
+            "amount",
+            "direction",
+            "escrow_id",
+            "description",
+            "created_at",
+        }
+        assert isinstance(item["amount"], int)
+
+    self_view = client.get(
+        f"/v1/accounts/{sibling['account']['id']}/settlements",
+        headers=sib_hdr,
+    )
+    assert self_view.status_code == 200
+    assert len(self_view.json()["settlements"]) == len(items)
+
+
+def test_managed_list_includes_gateway_claims_and_gateway_caller_agents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    db_url = f"sqlite:///{tmp_path / 'gw_managed.db'}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("A2A_EXCHANGE_DATABASE_URL", db_url)
+    monkeypatch.setenv("A2A_EXCHANGE_AUTO_CREATE_SCHEMA", "true")
+    monkeypatch.setenv("A2A_EXCHANGE_STARTER_TOKENS", "100")
+    monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR", "0")
+    monkeypatch.setenv("A2A_EXCHANGE_REGISTER_RATE_LIMIT_DAY", "0")
+    monkeypatch.setenv("A2A_EXCHANGE_INVITE_CODE", "")
+    monkeypatch.setenv("A2A_EXCHANGE_GATEWAY_INVITE_CODE", "gw-secret")
+
+    import exchange.config as config_mod
+    import exchange.ratelimit as ratelimit_mod
+    import exchange.auth as auth_mod
+    import exchange.ownership as ownership_mod
+    import exchange.routes.accounts as accounts_mod
+    import exchange.app as app_mod
+
+    importlib.reload(config_mod)
+    importlib.reload(ratelimit_mod)
+    importlib.reload(auth_mod)
+    importlib.reload(ownership_mod)
+    importlib.reload(accounts_mod)
+    importlib.reload(app_mod)
+
+    with TestClient(app_mod.create_app()) as gw_client:
+        owner = _register(gw_client, "GwTestOwner", SHARED_DEV)
+        agent_v = _register(gw_client, "GwVerifiedAgent", SHARED_DEV)
+        agent_s = _register(gw_client, "GwSoftAgent", SHARED_DEV)
+
+        gw_resp = gw_client.post(
+            "/v1/accounts/register",
+            json={
+                "bot_name": "ProdGateway",
+                "developer_id": "dev-gateway-op",
+                "account_type": "gateway",
+                "invite_code": "gw-secret",
+                **_REG,
+            },
+        )
+        assert gw_resp.status_code == 201, gw_resp.text
+        gw = gw_resp.json()
+        gw_hdr = {"Authorization": f"Bearer {gw['api_key']}"}
+
+        # Verified claim on agent_v, soft claim on agent_s
+        r1 = gw_client.post(
+            f"/v1/accounts/{agent_v['account']['id']}/claim",
+            headers=gw_hdr,
+            json={"agent_api_key": agent_v["api_key"]},
+        )
+        assert r1.status_code == 201
+        r2 = gw_client.post(
+            f"/v1/accounts/{agent_s['account']['id']}/claim",
+            headers=gw_hdr,
+            json={},
+        )
+        assert r2.status_code == 201
+
+        # Owner sees both verified and soft claims on their managed agents
+        owner_list = _claim_via_list(gw_client, owner["api_key"])
+        assert owner_list["caller_account_type"] == "agent"
+        assert owner_list["gateway_claimed_agents"] == []
+        bots_by_id = {b["id"]: b for b in owner_list["bots"]}
+
+        v_claims = bots_by_id[agent_v["account"]["id"]]["gateway_claims"]
+        assert len(v_claims) == 1
+        assert v_claims[0]["gateway_id"] == gw["account"]["id"]
+        assert v_claims[0]["gateway_name"] == "ProdGateway"
+        assert v_claims[0]["verified"] is True
+
+        s_claims = bots_by_id[agent_s["account"]["id"]]["gateway_claims"]
+        assert len(s_claims) == 1
+        assert s_claims[0]["gateway_name"] == "ProdGateway"
+        assert s_claims[0]["verified"] is False
+
+        # Gateway caller gets caller_account_type == "gateway" and gateway_claimed_agents
+        gw_list = _claim_via_list(gw_client, gw["api_key"])
+        assert gw_list["caller_account_type"] == "gateway"
+        assert gw_list["developer_ids"] == ["dev-gateway-op"]
+        assert gw_list["bots"] == []
+        assert gw_list["count"] == 0
+        claimed_ids = {a["id"] for a in gw_list["gateway_claimed_agents"]}
+        assert claimed_ids == {agent_v["account"]["id"], agent_s["account"]["id"]}
+        flat_gw = json.dumps(gw_list)
+        assert "api_key" not in flat_gw
