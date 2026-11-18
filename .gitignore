@@ -27,6 +27,9 @@ dist/
 
 .ipynb_checkpoints/
 
+# Editor / IDE local state
+.cursor/
+
 # Windows "Mark of the Web" artifacts sometimes appear when copied from NTFS.
 *:Zone.Identifier
 
