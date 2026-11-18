@@ -52,6 +52,21 @@ def _start(app, port: int) -> uvicorn.Server:
     raise RuntimeError(f"service on {port} did not become healthy")
 
 
+def _register_observer(client, auth_header, ctx) -> dict:
+    """Register the read-only observer and have the operator bind it to the policy.
+
+    The binding is what lets a non-party account read the escrow's binding view.
+    """
+    observer = _register(client, "ObserverBot", ["audit"])
+    bound = client.post(
+        "/v1/exchange/assurance/bind-account",
+        headers=auth_header(ctx["operator_key"]),
+        json={"account_id": observer["account"]["id"], "policy_id": ctx["policy_id"]},
+    )
+    assert bound.status_code == 200, bound.text
+    return observer
+
+
 def _scenario(profile: str) -> ScenarioSpec:
     return ScenarioSpec(
         scenario_id="analytical-task-v1",
@@ -77,7 +92,7 @@ def _run(exchange_app, auth_header, profile: str, tmp_path: Path, actors=None):
     try:
         with httpx.Client(base_url=exchange_url, timeout=10.0) as client:
             ctx = _bootstrap(client, auth_header, acceptance_required=profile == "strengthened")
-            observer = _register(client, "ObserverBot", ["audit"])
+            observer = _register_observer(client, auth_header, ctx)
             created = client.post(
                 "/v1/exchange/escrow",
                 headers={**auth_header(ctx["requester"]["api_key"]), "Idempotency-Key": "live-create"},
@@ -177,7 +192,7 @@ def test_cli_runs_from_an_empty_evidence_store(exchange_app, auth_header, tmp_pa
     try:
         with httpx.Client(base_url=exchange_url, timeout=10.0) as client:
             ctx = _bootstrap(client, auth_header, acceptance_required=profile == "strengthened")
-            observer_bot = _register(client, "ObserverBot", ["audit"])
+            observer_bot = _register_observer(client, auth_header, ctx)
             (secrets / "reader").write_text(observer_bot["api_key"], encoding="utf-8")
             created = client.post(
                 "/v1/exchange/escrow",
