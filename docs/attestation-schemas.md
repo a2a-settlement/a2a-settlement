@@ -40,10 +40,12 @@ All three payloads include a `settlement` object:
   "rail": "a2a-se",
   "task_id": "task-123",
   "task_type": "sentiment-analysis",
-  "self_dealing_class": "arms_length",
+  "self_dealing_class": null,
   "occurred_at": "2026-06-10T15:00:00Z"
 }
 ```
+
+`self_dealing_class` is always `null` in attestations the exchange issues now. The key stays in the v1 schema so older attestations still validate, but the exchange no longer records its self-dealing classification here: the endpoint is public, and because the payload is hashed, a withheld value could be recovered by trying the three possible classes against `data_hash`. Operators read the classification from the escrow detail endpoint. Attestations issued before this change keep whatever value they were written with.
 
 `PartyRef.external_ids` is reserved for external identity systems such as Foxbook DIDs. Native A2A-SE identity uses `did:a2a:{account_id}`.
 
