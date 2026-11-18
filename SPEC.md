@@ -342,6 +342,7 @@ All error responses use a consistent envelope:
 | `GET` | `/exchange/transactions` | API Key | List transaction history |
 | `GET` | `/exchange/escrows/{escrow_id}` | API Key | Get escrow details. Only the escrow's requester, its provider and operator accounts may read it; any other account gets `403`. Operator callers also receive `self_dealing_class`; the key is absent for the requester and the provider |
 | `GET` | `/stats` | Public | Network health: supply, velocity, active escrows |
+| `GET` | `/stats/recent-activity` | Public | Recent escrows, newest first. Each entry carries `timestamp`, `outcome` and `status`. Operator callers also receive the escrow id, both parties' names, the amount and the task id |
 
 ### 4.4. Account Registration
 
