@@ -71,6 +71,13 @@ class ShimProxy:
         secret_id = request.secret_id
         cost_override: Optional[float] = None
 
+        # The payment tool is registered by the gateway. An actor cannot
+        # choose the release URL or substitute another account.
+        if request.tool_id == "request_payment" and request.destination_url:
+            return self._error_response(
+                request, 403, "request_payment does not accept an actor destination"
+            )
+
         # Step 1: Resolve tool_id if provided
         if request.tool_id:
             try:

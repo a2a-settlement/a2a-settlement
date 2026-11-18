@@ -29,6 +29,7 @@ def _setup_escrow(client, auth_header):
         json={
             "bot_name": "RequesterBot",
             "developer_id": "dev",
+            "owner_api_key": provider["api_key"],
             "developer_name": "Test Dev",
             "contact_email": "test@test.dev",
             "skills": ["orchestration"],
@@ -383,3 +384,97 @@ def test_warning_not_sent_twice(exchange_app, auth_header):
             counts2 = run_expiry_sweep()
 
         assert counts2["warned"] == 0
+
+
+def _to_disputed(client, auth_header, requester_key, provider_key, eid):
+    """File a dispute, answer it, and let the evidence window close."""
+    _file_dispute(client, auth_header, requester_key, eid)
+    client.post(
+        f"/v1/exchange/escrow/{eid}/evidence",
+        headers=auth_header(provider_key),
+        json={"evidence_type": "service", "summary": "work was delivered as agreed"},
+    )
+    from exchange.tasks import run_expiry_sweep
+
+    closed = datetime.now(timezone.utc) + timedelta(minutes=EVIDENCE_WINDOW_MINUTES + 1)
+    with patch("exchange.observers._now", return_value=closed):
+        run_expiry_sweep()
+    assert _status(client, auth_header, requester_key, eid) == "disputed"
+
+
+def _stake_return_count(eid):
+    from sqlalchemy import func, select
+
+    from exchange.config import SessionLocal
+    from exchange.models import Transaction
+
+    with SessionLocal() as session, session.begin():
+        return session.execute(
+            select(func.count())
+            .select_from(Transaction)
+            .where(
+                Transaction.escrow_id == eid,
+                Transaction.tx_type == "dispute_stake_return",
+            )
+        ).scalar_one()
+
+
+def _sweep_while_another_sweep_wins(moment):
+    """Run a sweep that loads its rows, then loses the claim to a second sweep."""
+    import exchange.observers as obs
+    from exchange.tasks import run_expiry_sweep
+
+    real_refund = obs._refund_escrow
+    raced = {"done": False}
+
+    def racing_refund(session, escrow, now, description, **kwargs):
+        if not raced["done"]:
+            raced["done"] = True
+            run_expiry_sweep()
+        return real_refund(session, escrow, now, description, **kwargs)
+
+    with patch("exchange.observers._now", return_value=moment), patch.object(
+        obs, "_refund_escrow", racing_refund
+    ):
+        run_expiry_sweep()
+    assert raced["done"]
+
+
+def test_overlapping_sweeps_return_the_expired_dispute_stake_once(
+    exchange_app, auth_header
+):
+    """A sweep that loses the claim must not return the stake a second time."""
+    with TestClient(exchange_app) as client:
+        escrow, requester_key, provider_key, _pid = _setup_escrow(client, auth_header)
+        eid = escrow["escrow_id"]
+        _to_disputed(client, auth_header, requester_key, provider_key, eid)
+
+        _sweep_while_another_sweep_wins(
+            datetime.now(timezone.utc)
+            + timedelta(minutes=EVIDENCE_WINDOW_MINUTES + 90)
+        )
+
+        assert _status(client, auth_header, requester_key, eid) == "expired"
+        assert _stake_return_count(eid) == 1
+        bal = client.get("/v1/exchange/balance", headers=auth_header(requester_key)).json()
+        assert bal["available"] == 100
+        assert bal["held_in_escrow"] == 0
+
+
+def test_overlapping_sweeps_return_the_default_judgment_stake_once(
+    exchange_app, auth_header
+):
+    with TestClient(exchange_app) as client:
+        escrow, requester_key, _pk, _pid = _setup_escrow(client, auth_header)
+        eid = escrow["escrow_id"]
+        _file_dispute(client, auth_header, requester_key, eid)
+
+        _sweep_while_another_sweep_wins(
+            datetime.now(timezone.utc) + timedelta(minutes=EVIDENCE_WINDOW_MINUTES + 1)
+        )
+
+        assert _status(client, auth_header, requester_key, eid) == "refunded"
+        assert _stake_return_count(eid) == 1
+        bal = client.get("/v1/exchange/balance", headers=auth_header(requester_key)).json()
+        assert bal["available"] == 100
+        assert bal["held_in_escrow"] == 0

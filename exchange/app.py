@@ -28,6 +28,9 @@ import exchange.identity.issuer_registry  # noqa: F401 — register TrustedIssue
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.auto_create_schema:
         Base.metadata.create_all(bind=engine)
+        from exchange.schema_updates import ensure_assurance_schema
+
+        ensure_assurance_schema(engine)
 
     if settings.kya_enabled:
         from exchange.identity.issuer_registry import IssuerRegistry
@@ -151,6 +154,9 @@ def create_app() -> FastAPI:
 
     api_router.include_router(reputation_mod.router)
     api_router.include_router(settlement.router)
+    from exchange.routes import assurance as assurance_routes
+
+    api_router.include_router(assurance_routes.router)
     api_router.include_router(attestations.router)
     api_router.include_router(stats.router)
     api_router.include_router(webhooks.router)

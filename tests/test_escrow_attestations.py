@@ -20,6 +20,7 @@ def test_escrow_attestations_endpoint_returns_typed_release(exchange_app, auth_h
             json={
                 "bot_name": "AttestationRequester",
                 "developer_id": "dev",
+                "owner_api_key": provider["api_key"],
                 "developer_name": "Test Dev",
                 "contact_email": "requester@test.dev",
                 "skills": ["orchestration"],

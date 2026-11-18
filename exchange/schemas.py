@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Error ---
@@ -34,6 +34,9 @@ class RegisterRequest(BaseModel):
     invite_code: str | None = None
     daily_spend_limit: int | None = None
     account_type: str = Field("agent", pattern=r"^(agent|gateway)$")
+    is_test: bool = False
+    # Required when developer_id is already claimed: the owner's ate_ key.
+    owner_api_key: str | None = None
 
 
 class RegisterAccountInfo(BaseModel):
@@ -93,6 +96,7 @@ class DirectoryAccountResponse(BaseModel):
     account_type: str = "agent"
     created_at: datetime | None = None
     gateway_claims: list["GatewayClaimInfo"] | None = None
+    is_test: bool = False
 
 
 class DirectoryResponse(BaseModel):
@@ -123,6 +127,15 @@ class UpdateSkillsResponse(BaseModel):
 class RotateKeyResponse(BaseModel):
     api_key: str
     grace_period_minutes: int
+
+
+class AttachDeveloperIdRequest(BaseModel):
+    agent_api_key: str = Field(default="", repr=False)
+
+
+class AdminBindDeveloperIdRequest(BaseModel):
+    owner_account_id: str = Field(..., min_length=1, max_length=36)
+    reason: str = Field(..., min_length=1, max_length=2000)
 
 
 # --- Gateway Claims ---
@@ -351,6 +364,10 @@ class AttestationListResponse(BaseModel):
 # --- Settlement ---
 
 
+def _is_lowercase_sha256(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
 class EscrowRequest(BaseModel):
     provider_id: str
     amount: int
@@ -362,6 +379,24 @@ class EscrowRequest(BaseModel):
     deliverables: list[Deliverable] | None = None
     required_attestation_level: AttestationLevel | None = None
     vi_credential_chain: VICredentialChain | None = None
+    acceptance_required: bool | None = None
+    root_budget_id: str | None = None
+    criteria_hash: str | None = None
+    obligation_policy_id: str | None = None
+    workflow_locked: bool | None = None
+    cancel_secret_hash: str | None = None
+
+    @model_validator(mode="after")
+    def _workflow_lock_requires_hash(self):
+        locked = self.workflow_locked is True
+        digest = self.cancel_secret_hash
+        if digest is not None and not _is_lowercase_sha256(digest):
+            raise ValueError("cancel_secret_hash must be 64 lowercase hex characters")
+        if locked and digest is None:
+            raise ValueError("workflow_locked requires cancel_secret_hash")
+        if digest is not None and not locked:
+            raise ValueError("cancel_secret_hash requires workflow_locked true")
+        return self
 
 
 class EscrowResponse(BaseModel):
@@ -392,6 +427,7 @@ class ReleaseResponse(BaseModel):
 class RefundRequest(BaseModel):
     escrow_id: str
     reason: str | None = None
+    cancel_secret: str | None = None
 
 
 class RefundResponse(BaseModel):
@@ -625,6 +661,7 @@ class EscrowDetailResponse(BaseModel):
     efficacy_check_at: datetime | None = None
     efficacy_criteria: str | None = None
     vi_credential_chain: dict | None = None
+    workflow_locked: bool = False
     created_at: datetime | None = None
     resolved_at: datetime | None = None
 

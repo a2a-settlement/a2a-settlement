@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.registration_helpers import post_register
+
 _REG_PAYLOAD = {
     "bot_name": "TestBot",
     "developer_id": "dev-test",
@@ -108,12 +110,12 @@ def test_rate_limit_blocks_after_threshold(tmp_path, monkeypatch):
     )
     with TestClient(app) as client:
         for i in range(2):
-            resp = client.post("/v1/accounts/register", json={
+            resp = post_register(client, {
                 **_REG_PAYLOAD, "bot_name": f"Bot{i}",
             })
             assert resp.status_code == 201, resp.text
 
-        resp = client.post("/v1/accounts/register", json={
+        resp = post_register(client, {
             **_REG_PAYLOAD, "bot_name": "Bot2",
         })
         assert resp.status_code == 429
@@ -136,7 +138,7 @@ def test_rate_limit_trusted_ip_bypass(tmp_path, monkeypatch):
     )
     with TestClient(app) as client:
         for i in range(3):
-            resp = client.post("/v1/accounts/register", json={
+            resp = post_register(client, {
                 **_REG_PAYLOAD, "bot_name": f"Trusted{i}",
             })
             assert resp.status_code == 201, resp.text
@@ -161,8 +163,8 @@ def test_suspend_requires_operator(exchange_app, auth_header):
 
 def test_suspend_marks_account(exchange_app, auth_header):
     with TestClient(exchange_app) as client:
-        target = client.post("/v1/accounts/register", json=_REG_PAYLOAD).json()
-        operator = client.post("/v1/accounts/register", json={
+        target = post_register(client, dict(_REG_PAYLOAD)).json()
+        operator = post_register(client, {
             **_REG_PAYLOAD, "bot_name": "OperatorBot",
         }).json()
 

@@ -31,6 +31,11 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if request.method != "POST":
             return await call_next(request)
 
+        from exchange.financial_idempotency import route_is_financial
+
+        if route_is_financial(request.url.path):
+            return await call_next(request)
+
         idem_key = request.headers.get("idempotency-key")
         if not idem_key:
             return await call_next(request)

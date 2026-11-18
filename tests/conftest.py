@@ -36,6 +36,7 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import exchange.webhooks as webhooks_mod
     import exchange.reputation_metrics as reputation_metrics_mod
     import exchange.trust_tiers as trust_tiers_mod
+    import exchange.ownership as ownership_mod
     import exchange.routes.accounts as accounts_mod
     import exchange.routes.reputation as reputation_mod
     import exchange.routes.settlement as settlement_mod
@@ -52,6 +53,7 @@ def exchange_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(webhooks_mod)
     importlib.reload(reputation_metrics_mod)
     importlib.reload(trust_tiers_mod)
+    importlib.reload(ownership_mod)
     importlib.reload(accounts_mod)
     importlib.reload(reputation_mod)
     importlib.reload(settlement_mod)

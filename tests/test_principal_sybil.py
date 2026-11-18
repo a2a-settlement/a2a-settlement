@@ -5,11 +5,13 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from tests.registration_helpers import post_register
+
 
 def _reg(client, name: str, developer_id: str = "dev-sybil") -> dict:
-    return client.post(
-        "/v1/accounts/register",
-        json={
+    return post_register(
+        client,
+        {
             "bot_name": name,
             "developer_id": developer_id,
             "developer_name": "Dev",

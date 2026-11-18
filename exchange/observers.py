@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 from sqlalchemy.orm import Session
 
+from exchange.assurance_ledger import commit_spend, release_reservation
 from exchange.models import Attestation, Balance, Escrow, Transaction
 
 logger = logging.getLogger(__name__)
@@ -19,21 +20,59 @@ def _lock(stmt):
     return stmt.with_for_update()
 
 
-def _refund_escrow(session: Session, escrow: Escrow, now: datetime, description: str) -> None:
-    """Refund a single escrow's held amount back to the requester."""
+def _claim_terminal_status(
+    session: Session,
+    escrow: Escrow,
+    expected_status: str,
+    terminal_status: str,
+    now: datetime,
+) -> bool:
+    """Claim one terminal transition.
+
+    SQLite ignores FOR UPDATE. The status predicate is the once-only gate, and
+    the reservation moves only when this update changes exactly one row. Refresh
+    so a later flush cannot write the pre-claim status back over that update;
+    a second identical write reports zero changed rows on SQLite and aborts.
+    """
+    result = session.execute(
+        update(Escrow)
+        .where(Escrow.id == escrow.id, Escrow.status == expected_status)
+        .values(status=terminal_status, resolved_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        return False
+    session.refresh(escrow)
+    return True
+
+
+def _refund_escrow(
+    session: Session,
+    escrow: Escrow,
+    now: datetime,
+    description: str,
+    *,
+    expected_status: str,
+    terminal_status: str = "expired",
+) -> bool:
+    """Refund a single escrow's held amount back to the requester.
+
+    False when a concurrent sweep already claimed the row. A missing balance
+    still returns True so callers keep today's status and webhook behaviour.
+    """
     total_held = int(escrow.amount + escrow.fee_amount)
     bal = session.execute(
         _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
     ).scalar_one_or_none()
     if bal is None:
-        return
+        return True
+    if not _claim_terminal_status(
+        session, escrow, expected_status, terminal_status, now
+    ):
+        return False
     bal.available += total_held
     bal.held_in_escrow -= total_held
     session.add(bal)
-
-    escrow.status = "expired"
-    escrow.resolved_at = now
-    session.add(escrow)
 
     session.add(
         Transaction(
@@ -45,17 +84,11 @@ def _refund_escrow(session: Session, escrow: Escrow, now: datetime, description:
             description=description,
         )
     )
+    release_reservation(session, escrow, total_held)
+    return True
 
 
 def _return_dispute_stake(session: Session, escrow: Escrow) -> None:
-    """Return a held dispute stake to the filer on a terminal timeout path.
-
-    A timeout is never operator-adjudicated, so no fault has been found and the
-    stake goes back to whoever filed the dispute. Only an explicit operator
-    ruling via the ``resolve`` endpoint can forfeit it to the counterparty.
-    Reuses ``_settle_dispute_stake`` so the ledger/transaction logic stays in
-    one place (imported lazily to avoid a routes<->observers import cycle).
-    """
     from exchange.routes.settlement import _settle_dispute_stake
 
     _settle_dispute_stake(session, escrow, None)
@@ -84,8 +117,16 @@ class PaymentTimeoutObserver:
         )
         expired: list[Escrow] = []
         for escrow in stale:
-            _refund_escrow(session, escrow, now, "Auto-expired: TTL exceeded")
-            expired.append(escrow)
+            if escrow.workflow_locked:
+                continue
+            if _refund_escrow(
+                session,
+                escrow,
+                now,
+                "Auto-expired: TTL exceeded",
+                expected_status="held",
+            ):
+                expired.append(escrow)
         return expired
 
     def expire_stale_disputes(self, session: Session) -> list[Escrow]:
@@ -108,9 +149,15 @@ class PaymentTimeoutObserver:
         )
         expired: list[Escrow] = []
         for escrow in stale:
-            _refund_escrow(session, escrow, now, "Auto-expired: dispute TTL exceeded")
-            _return_dispute_stake(session, escrow)
-            expired.append(escrow)
+            if _refund_escrow(
+                session,
+                escrow,
+                now,
+                "Auto-expired: dispute TTL exceeded",
+                expected_status="disputed",
+            ):
+                _return_dispute_stake(session, escrow)
+                expired.append(escrow)
         return expired
 
     def warn_expiring_soon(self, session: Session) -> list[Escrow]:
@@ -135,6 +182,8 @@ class PaymentTimeoutObserver:
         )
         warned: list[Escrow] = []
         for escrow in approaching:
+            if escrow.workflow_locked:
+                continue
             escrow.warning_sent_at = now
             session.add(escrow)
             warned.append(escrow)
@@ -186,19 +235,31 @@ class PaymentTimeoutObserver:
 
             if respondent not in submitter_ids:
                 if respondent == escrow.provider_id:
-                    _refund_escrow(
-                        session, escrow, now,
+                    claimed = _refund_escrow(
+                        session,
+                        escrow,
+                        now,
                         "Default judgment: provider failed to submit evidence",
+                        expected_status="evidence_pending",
+                        terminal_status="refunded",
                     )
-                    escrow.status = "refunded"
                 else:
-                    self._release_escrow(session, escrow, now)
-                    escrow.status = "released"
-                # Default judgment: the non-responding respondent lost, so the
-                # filer prevailed and their dispute stake is returned.
+                    claimed = self._release_escrow(session, escrow, now)
+                if not claimed:
+                    continue
+                # Missing-balance path: no money moved, so the hold is released.
+                if escrow.status == "evidence_pending":
+                    terminal = (
+                        "refunded" if respondent == escrow.provider_id else "released"
+                    )
+                    if not _claim_terminal_status(
+                        session, escrow, "evidence_pending", terminal, now
+                    ):
+                        continue
+                    release_reservation(
+                        session, escrow, int(escrow.amount + escrow.fee_amount)
+                    )
                 _return_dispute_stake(session, escrow)
-                escrow.resolved_at = now
-                session.add(escrow)
                 defaulted.append(escrow)
             else:
                 escrow.status = "disputed"
@@ -206,8 +267,12 @@ class PaymentTimeoutObserver:
         return defaulted
 
     @staticmethod
-    def _release_escrow(session: Session, escrow: Escrow, now: datetime) -> None:
-        """Release escrow funds to the provider (default judgment)."""
+    def _release_escrow(session: Session, escrow: Escrow, now: datetime) -> bool:
+        """Release escrow funds to the provider (default judgment).
+
+        False when a concurrent sweep already claimed the row. A missing
+        balance still returns True so the caller keeps today's status write.
+        """
         total_held = int(escrow.amount + escrow.fee_amount)
         req_bal = session.execute(
             _lock(select(Balance).where(Balance.account_id == escrow.requester_id))
@@ -216,15 +281,17 @@ class PaymentTimeoutObserver:
             _lock(select(Balance).where(Balance.account_id == escrow.provider_id))
         ).scalar_one_or_none()
         if req_bal is None or prov_bal is None:
-            return
+            return True
+        if not _claim_terminal_status(
+            session, escrow, "evidence_pending", "released", now
+        ):
+            return False
         req_bal.held_in_escrow -= total_held
         req_bal.total_spent += total_held
         session.add(req_bal)
         prov_bal.available += int(escrow.amount)
         prov_bal.total_earned += int(escrow.amount)
         session.add(prov_bal)
-        escrow.resolved_at = now
-        session.add(escrow)
         session.add(
             Transaction(
                 escrow_id=escrow.id,
@@ -235,6 +302,8 @@ class PaymentTimeoutObserver:
                 description="Default judgment: requester failed to submit evidence",
             )
         )
+        commit_spend(session, escrow, total_held)
+        return True
 
     def expire_stale_attestations(self, session: Session) -> list[Attestation]:
         """Transition active attestations past their TTL to expired."""

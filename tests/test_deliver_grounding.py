@@ -22,6 +22,7 @@ def _register_pair(client, auth_header):
         json={
             "bot_name": "GroundingRequester",
             "developer_id": "dev",
+            "owner_api_key": provider["api_key"],
             "developer_name": "Test",
             "contact_email": "gr@test.dev",
             "skills": ["orchestration"],

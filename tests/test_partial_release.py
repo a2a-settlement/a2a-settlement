@@ -20,6 +20,7 @@ def _register_pair(client, auth_header):
         json={
             "bot_name": "RequesterBot",
             "developer_id": "dev",
+            "owner_api_key": provider["api_key"],
             "developer_name": "Test Dev",
             "contact_email": "requester@test.dev",
             "skills": ["orchestration"],

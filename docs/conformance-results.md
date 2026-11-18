@@ -16,6 +16,20 @@ Rail: A2A-SE reference exchange (`a2a-settlement` / `exchange.a2a-settlement.org
 
 All five artefact JWS signatures verify against AlgoVoi JWKS (`kid: d0481df4cbbda8e8aba86709419884ef`).
 
+AlgoVoi independently re-ran these vectors and the schema audit below on 2026-06-16 ([#2](https://github.com/a2a-settlement/a2a-settlement/pull/2)).
+
+## Schema audit
+
+AlgoVoi audited the A2A-SE attestation schemas in `schemas/` for structural compatibility with the AlgoVoi compliance envelope format.
+
+| Schema | Title | Required fields | AlgoVoi compatibility |
+|--------|-------|----------------|----------------------|
+| `escrow-release-attestation.v1.json` | `EscrowReleaseAttestation` | `header`, `settlement`, `amount_paid` | Compatible — `SettlementCore.amount` is integer; `settlement_kind` default `a2a-se` matches envelope |
+| `escrow-refund-attestation.v1.json` | `EscrowRefundAttestation` | `header`, `settlement`, `amount_returned` | Compatible — `refund_kind` enum (`full`, `holdback`, `auto_dependent`) maps cleanly to AlgoVoi's refund classification |
+| `dispute-resolution-attestation.v1.json` | `DisputeResolutionAttestation` | `header`, `settlement`, `resolution` | Compatible — `resolution` enum (`release`, `refund`) is a strict subset of AlgoVoi's verdict space |
+
+`SettlementCore`, `AttestationHeader`, `PartyRef`, and `CryptographicProof` definitions are shared across all three schemas. All amount fields are integer (no float). `CryptographicProof.payload_hash`, `merkle_root`, and `merkle_leaf_index` are structurally compatible with AlgoVoi's receipt hash fields.
+
 ## A2A-SE settlement vector detail
 
 ### escrow_double_release
@@ -44,4 +58,5 @@ Live rail runs the same code path (deployed from `main`). Behavioural equivalenc
 ## Mapping notes for conformance chair
 
 - AlgoVoi `expected_error_code` strings (`RELEASE_IDEMPOTENCY_VIOLATION`, `REFUND_AUTHORIZATION_REPLAY`) are not emitted literally by FastAPI; the rail returns HTTP 400 with human-readable `detail`. A conformance adapter can map status + detail substring to vector verdict.
+- `EscrowReleaseAttestation.reputation_attestation_type` defaults to `urn:a2a-settlement:ema-reputation:v1`. AlgoVoi does not currently consume EMA reputation scores, but the field is compatible as an extension point.
 - Vectors tagged `settlement_kind: a2a-se` are the subset this rail owns. Dispute-amplification and mediator-grooming vectors need separate gates or mediator integration.

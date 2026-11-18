@@ -4,18 +4,20 @@ import secrets
 from datetime import datetime, timezone
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import and_, func as sa_func, select
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy import and_, func as sa_func, or_, select
+from sqlalchemy.orm import Session, joinedload
 
 from exchange.auth import authenticate_bot, authenticate_bot_optional
 from exchange.config import get_session, settings
 from exchange.ratelimit import limiter
-from exchange.models import Account, Balance, GatewayClaim, Transaction
+from exchange.models import Account, Balance, DeveloperIdOwner, GatewayClaim, Transaction
 from exchange.ratelimit import check_register_rate_limit
 from exchange.schemas import (
     AccountResponse,
+    AdminBindDeveloperIdRequest,
     AgentCardResponse,
+    AttachDeveloperIdRequest,
     ClaimListResponse,
     ClaimRequest,
     ClaimResponse,
@@ -38,6 +40,16 @@ from exchange.identity.did_resolver import DIDResolver
 from exchange.identity.issuer_registry import IssuerRegistry
 from exchange.identity.models import AgentCardModel
 from exchange.identity.vc_verifier import VCVerifier
+from exchange.ownership import (
+    admin_bind_developer_id,
+    assert_controls_developer_id,
+    assert_registration_allowed,
+    attach_developer_id_by_key,
+    claim_developer_id,
+    detach_developer_id,
+    ensure_legacy_open,
+    try_claim_own_developer_id,
+)
 from exchange.principal_resolver import (
     get_or_create_principal,
     link_agent_to_principal,
@@ -100,6 +112,9 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
         if existing is not None:
             raise HTTPException(status_code=409, detail="A bot with this name already exists")
 
+        assert_registration_allowed(session, req.developer_id, req.owner_api_key)
+        ensure_legacy_open(session, req.developer_id)
+
         spend_limit = req.daily_spend_limit
         if spend_limit is None and settings.default_daily_spend_limit > 0:
             spend_limit = settings.default_daily_spend_limit
@@ -114,6 +129,7 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)) -> R
             skills=req.skills or [],
             daily_spend_limit=spend_limit,
             account_type=req.account_type,
+            is_test=req.is_test,
         )
         session.add(account)
         session.flush()
@@ -191,6 +207,7 @@ def _directory_account_response(
         account_type=acct.account_type,
         created_at=acct.created_at,
         gateway_claims=claim_info,
+        is_test=bool(acct.is_test),
     )
 
 
@@ -270,6 +287,347 @@ def directory(
     return DirectoryResponse(
         bots=[_directory_account_response(b, claims_by_agent.get(b.id)) for b in bots],
         count=len(bots),
+    )
+
+
+def _serialize_managed_agent(b: Account, claims: list[GatewayClaim]) -> dict:
+    return {
+        "id": b.id,
+        "bot_name": b.bot_name,
+        "status": b.status,
+        "developer_id": b.developer_id,
+        "reputation": float(b.reputation),
+        "created_at": b.created_at,
+        "last_activity_at": b.updated_at or b.created_at,
+        "is_test": bool(b.is_test),
+        "has_agent_card": bool(b.agent_card_json is not None),
+        "gateway_claims": [
+            {
+                "gateway_id": c.gateway_id,
+                "gateway_name": c.gateway.bot_name if c.gateway else "",
+                "verified": bool(c.verified),
+                "claimed_at": c.claimed_at,
+            }
+            for c in claims
+        ],
+    }
+
+
+@router.get("/accounts/managed", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def list_managed_accounts(
+    request: Request,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        try_claim_own_developer_id(session, caller)
+        developer_id = caller.developer_id
+        caller_account_type = caller.account_type
+
+        claimed_dev_ids = sorted(
+            session.execute(
+                select(DeveloperIdOwner.developer_id).where(
+                    DeveloperIdOwner.owner_account_id == caller.id,
+                    DeveloperIdOwner.status == "claimed",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        owned_dev_set = set(claimed_dev_ids)
+
+        if claimed_dev_ids:
+            bots = (
+                session.execute(
+                    select(Account)
+                    .where(Account.developer_id.in_(claimed_dev_ids))
+                    .where(Account.account_type != "gateway")
+                    .order_by(Account.created_at)
+                )
+                .scalars()
+                .all()
+            )
+        else:
+            bots = []
+
+        gw_agents: list[Account] = []
+        if caller_account_type == "gateway":
+            gw_agents = (
+                session.execute(
+                    select(Account)
+                    .join(GatewayClaim, GatewayClaim.account_id == Account.id)
+                    .where(
+                        GatewayClaim.gateway_id == caller.id,
+                        GatewayClaim.status == "active",
+                    )
+                    .order_by(Account.created_at)
+                )
+                .scalars()
+                .all()
+            )
+
+        all_agent_ids = list({b.id for b in bots} | {a.id for a in gw_agents})
+        claims_by_agent: dict[str, list[GatewayClaim]] = {}
+        if all_agent_ids:
+            claims_q = (
+                select(GatewayClaim)
+                .options(joinedload(GatewayClaim.gateway))
+                .where(
+                    GatewayClaim.account_id.in_(all_agent_ids),
+                    GatewayClaim.status == "active",
+                )
+                .order_by(GatewayClaim.claimed_at)
+            )
+            for c in session.execute(claims_q).scalars().all():
+                claims_by_agent.setdefault(c.account_id, []).append(c)
+
+        payload = [
+            _serialize_managed_agent(b, claims_by_agent.get(b.id, []))
+            for b in bots
+        ]
+        gw_payload = [
+            _serialize_managed_agent(
+                a,
+                claims_by_agent.get(a.id, [])
+                if a.developer_id in owned_dev_set
+                else [
+                    c
+                    for c in claims_by_agent.get(a.id, [])
+                    if c.verified or c.gateway_id == caller.id
+                ],
+            )
+            for a in gw_agents
+        ]
+
+    return {
+        "developer_id": developer_id,
+        "developer_ids": claimed_dev_ids,
+        "caller_account_type": caller_account_type,
+        "bots": payload,
+        "gateway_claimed_agents": gw_payload,
+        "count": len(payload),
+    }
+
+
+@router.post("/accounts/developer-ids/claim", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def claim_developer_id_route(
+    request: Request,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row = claim_developer_id(session, caller)
+
+    return {
+        "developer_id": row.developer_id,
+        "owner_account_id": row.owner_account_id,
+        "status": row.status,
+    }
+
+
+# Static developer-id paths. Must be registered before /accounts/{account_id}
+# so Starlette routing never shadows them.
+@router.post("/accounts/developer-ids/attach", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def attach_developer_id_route(
+    request: Request,
+    req: AttachDeveloperIdRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row = attach_developer_id_by_key(session, caller, req.agent_api_key)
+
+    return {
+        "developer_id": row.developer_id,
+        "owner_account_id": row.owner_account_id,
+        "status": row.status,
+    }
+
+
+@router.delete("/accounts/developer-ids/{developer_id}", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def detach_developer_id_route(
+    request: Request,
+    developer_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        caller = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if caller is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row = detach_developer_id(session, caller, developer_id)
+
+    return {
+        "developer_id": row.developer_id,
+        "status": row.status,
+    }
+
+
+@router.post("/admin/developer-ids/{developer_id}/bind", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def admin_bind_developer_id_route(
+    request: Request,
+    developer_id: str,
+    req: AdminBindDeveloperIdRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Bind or rebind a developer_id to an owner account (operator-only dispute override)."""
+    if current.get("status") != "operator":
+        raise HTTPException(
+            status_code=403,
+            detail="Only the exchange operator can bind developer IDs",
+        )
+    with session.begin():
+        actor = session.execute(
+            select(Account).where(Account.id == current["id"])
+        ).scalar_one_or_none()
+        if actor is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        row, event = admin_bind_developer_id(
+            session, actor, developer_id, req.owner_account_id, req.reason
+        )
+        return {
+            "developer_id": row.developer_id,
+            "owner_account_id": row.owner_account_id,
+            "status": row.status,
+            "previous_status": event.previous_status,
+            "previous_owner_account_id": event.previous_owner_account_id,
+            "audit_event_id": event.id,
+        }
+
+
+# Static path. Must be registered before /accounts/{account_id}/suspend or
+# Starlette binds account_id="admin" and the operator route 404s.
+@router.post("/accounts/admin/suspend", response_model=SuspendResponse, tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def suspend_account(
+    request: Request,
+    req: SuspendRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> SuspendResponse:
+    if current.get("status") != "operator":
+        raise HTTPException(status_code=403, detail="Only the exchange operator can suspend accounts")
+
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == req.account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if acct.status == "operator":
+            raise HTTPException(status_code=400, detail="Cannot suspend an operator account")
+        acct.status = "suspended"
+        session.add(acct)
+
+    return SuspendResponse(account_id=acct.id, reason=req.reason)
+
+
+@router.post(
+    "/accounts/{account_id}/suspend",
+    response_model=SuspendResponse,
+    tags=["Accounts"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def suspend_managed_account(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> SuspendResponse:
+    with session.begin():
+        target = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        assert_controls_developer_id(session, current["id"], target.developer_id)
+        if target.status == "operator":
+            raise HTTPException(status_code=400, detail="Cannot suspend an operator account")
+        if target.id == current["id"]:
+            raise HTTPException(status_code=400, detail="Cannot suspend your own account")
+        target.status = "suspended"
+        session.add(target)
+
+    return SuspendResponse(account_id=target.id, status="suspended")
+
+
+@router.post("/accounts/{account_id}/unsuspend", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def unsuspend_managed_account(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        target = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        assert_controls_developer_id(session, current["id"], target.developer_id)
+        if target.status == "suspended":
+            target.status = "active"
+            session.add(target)
+
+    return {"account_id": target.id, "status": target.status}
+
+
+@router.post(
+    "/accounts/{account_id}/rotate-key-managed",
+    response_model=RotateKeyResponse,
+    tags=["Accounts"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def rotate_key_managed(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> RotateKeyResponse:
+    new_key = f"ate_{secrets.token_hex(16)}"
+    new_hash = bcrypt.hashpw(
+        new_key.encode("utf-8"),
+        bcrypt.gensalt(rounds=settings.api_key_salt_rounds),
+    ).decode("utf-8")
+
+    with session.begin():
+        target = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        assert_controls_developer_id(session, current["id"], target.developer_id)
+        target.previous_api_key_hash = target.api_key_hash
+        target.key_rotated_at = datetime.now(timezone.utc)
+        target.api_key_hash = new_hash
+        session.add(target)
+
+    return RotateKeyResponse(
+        api_key=new_key,
+        grace_period_minutes=settings.key_rotation_grace_minutes,
     )
 
 
@@ -557,29 +915,6 @@ def rotate_did_key(
     }
 
 
-@router.post("/accounts/admin/suspend", response_model=SuspendResponse, tags=["Accounts"])
-@limiter.limit(settings.rate_limit_authenticated)
-def suspend_account(
-    request: Request,
-    req: SuspendRequest,
-    current: dict = Depends(authenticate_bot),
-    session: Session = Depends(get_session),
-) -> SuspendResponse:
-    if current.get("status") != "operator":
-        raise HTTPException(status_code=403, detail="Only the exchange operator can suspend accounts")
-
-    with session.begin():
-        acct = session.execute(select(Account).where(Account.id == req.account_id)).scalar_one_or_none()
-        if acct is None:
-            raise HTTPException(status_code=404, detail="Account not found")
-        if acct.status == "operator":
-            raise HTTPException(status_code=400, detail="Cannot suspend an operator account")
-        acct.status = "suspended"
-        session.add(acct)
-
-    return SuspendResponse(account_id=acct.id, reason=req.reason)
-
-
 # ---------------------------------------------------------------------------
 # KYA Agent Card Registration
 # ---------------------------------------------------------------------------
@@ -597,12 +932,22 @@ def register_agent(
     card_body: dict,
     session: Session = Depends(get_session),
     verifier: VCVerifier = Depends(get_vc_verifier),
+    x_owner_api_key: str | None = Header(default=None),
 ) -> KYARegisterResponse:
     """Register an agent with a KYA-enhanced Agent Card.
 
     Accepts raw JSON so signature verification uses the exact bytes the
     agent signed, avoiding datetime re-serialization mismatches.
+
+    ``owner_api_key`` is accepted as a body field or ``X-Owner-Api-Key``
+    header and is stripped before the card is verified or stored. A claimed
+    ``developer_id`` (the card ``id``) requires the owning account's key.
     """
+    raw_owner_key = card_body.pop("owner_api_key", None) if isinstance(card_body, dict) else None
+    owner_api_key = raw_owner_key if isinstance(raw_owner_key, str) and raw_owner_key else None
+    if owner_api_key is None and isinstance(x_owner_api_key, str) and x_owner_api_key:
+        owner_api_key = x_owner_api_key
+
     try:
         card = AgentCardModel.model_validate(card_body)
     except Exception as exc:
@@ -642,6 +987,9 @@ def register_agent(
             dup_did = session.execute(select(Account.id).where(Account.did == card.id)).scalar_one_or_none()
             if dup_did is not None:
                 raise HTTPException(status_code=409, detail="An agent with this DID is already registered")
+
+        assert_registration_allowed(session, card.id, owner_api_key)
+        ensure_legacy_open(session, card.id)
 
         spend_limit = settings.default_daily_spend_limit if settings.default_daily_spend_limit > 0 else None
 
@@ -733,8 +1081,12 @@ def update_agent_card(
     session: Session = Depends(get_session),
     verifier: VCVerifier = Depends(get_vc_verifier),
 ) -> AgentCardResponse:
-    if current["id"] != account_id:
-        raise HTTPException(status_code=403, detail="Can only update your own Agent Card")
+    with session.begin():
+        acct = session.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if current["id"] != account_id:
+            assert_controls_developer_id(session, current["id"], acct.developer_id)
 
     try:
         card = AgentCardModel.model_validate(card_body)
@@ -767,6 +1119,58 @@ def update_agent_card(
         kya_level_verified=acct.kya_level_verified,
         card=acct.agent_card_json,
     )
+
+
+@router.get("/accounts/{account_id}/settlements", tags=["Accounts"])
+@limiter.limit(settings.rate_limit_authenticated)
+def get_account_settlements(
+    request: Request,
+    account_id: str,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> dict:
+    with session.begin():
+        acct = session.execute(
+            select(Account).where(Account.id == account_id)
+        ).scalar_one_or_none()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if current["id"] != account_id:
+            assert_controls_developer_id(session, current["id"], acct.developer_id)
+
+        txs = (
+            session.execute(
+                select(Transaction)
+                .where(
+                    or_(
+                        Transaction.from_account == account_id,
+                        Transaction.to_account == account_id,
+                    ),
+                    Transaction.tx_type != "mint",
+                )
+                .order_by(Transaction.created_at.desc())
+                .limit(10)
+            )
+            .scalars()
+            .all()
+        )
+        settlements = [
+            {
+                "id": t.id,
+                "tx_type": t.tx_type,
+                "amount": int(t.amount),
+                "direction": "in" if t.to_account == account_id else "out",
+                "escrow_id": getattr(t, "escrow_id", None),
+                "description": t.description,
+                "created_at": t.created_at,
+            }
+            for t in txs
+        ]
+
+    return {
+        "account_id": account_id,
+        "settlements": settlements,
+    }
 
 
 @router.post("/accounts/admin/register-oracle", tags=["Accounts"])
