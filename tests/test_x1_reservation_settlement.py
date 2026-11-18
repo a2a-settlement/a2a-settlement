@@ -216,9 +216,9 @@ def test_dispute_expiry_releases_reservation_once(exchange_app, auth_header):
         assert _detail(client, auth_header, key, eid)["status"] == "expired"
         assert _budget(client, auth_header, key, root) == (0, 0)
         bal = _balance(client, auth_header, key)
-        # The dispute stake stays held; only amount + fee is returned.
-        assert bal["available"] == 100 - STAKE
-        assert bal["held_in_escrow"] == STAKE
+        # Amount + fee and the dispute stake are both returned.
+        assert bal["available"] == 100
+        assert bal["held_in_escrow"] == 0
         refunds = [
             tx
             for tx in _txns(client, auth_header, key)
@@ -254,8 +254,8 @@ def test_default_judgment_refund_releases_reservation_once(exchange_app, auth_he
         assert detail["resolved_at"] is not None
         assert _budget(client, auth_header, key, root) == (0, 0)
         bal = _balance(client, auth_header, key)
-        assert bal["available"] == 100 - STAKE
-        assert bal["held_in_escrow"] == STAKE
+        assert bal["available"] == 100
+        assert bal["held_in_escrow"] == 0
         assert bal["total_spent"] == 0
         refunds = [
             tx
@@ -300,8 +300,8 @@ def test_default_judgment_release_commits_spend_once(exchange_app, auth_header):
         assert requester["held_in_escrow"] == 0
         assert requester["total_spent"] == HOLD
         provider = _balance(client, auth_header, provider_key)
-        assert provider["available"] == 100
-        assert provider["held_in_escrow"] == STAKE
+        assert provider["available"] == 100 + AMOUNT
+        assert provider["held_in_escrow"] == 0
         assert provider["total_earned"] == AMOUNT
         releases = [
             tx

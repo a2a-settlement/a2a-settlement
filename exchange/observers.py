@@ -88,6 +88,12 @@ def _refund_escrow(
     return True
 
 
+def _return_dispute_stake(session: Session, escrow: Escrow) -> None:
+    from exchange.routes.settlement import _settle_dispute_stake
+
+    _settle_dispute_stake(session, escrow, None)
+
+
 class PaymentTimeoutObserver:
     """Observes escrow deadlines and transitions timed-out escrows to expired."""
 
@@ -150,6 +156,7 @@ class PaymentTimeoutObserver:
                 "Auto-expired: dispute TTL exceeded",
                 expected_status="disputed",
             ):
+                _return_dispute_stake(session, escrow)
                 expired.append(escrow)
         return expired
 
@@ -252,6 +259,7 @@ class PaymentTimeoutObserver:
                     release_reservation(
                         session, escrow, int(escrow.amount + escrow.fee_amount)
                     )
+                _return_dispute_stake(session, escrow)
                 defaulted.append(escrow)
             else:
                 escrow.status = "disputed"
