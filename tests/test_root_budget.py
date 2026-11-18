@@ -133,3 +133,80 @@ def test_release_moves_reservation_to_spent_once(exchange_app, auth_header):
         body = view.json()
         assert body["reserved_units"] == 0
         assert body["spent_units"] == 11
+
+
+def _plain_escrow_world(client, auth_header):
+    """An ordinary escrow with no policy or root budget, plus an outsider and an operator."""
+    from tests.test_acceptance_binding import _promote_to_operator
+
+    requester = _register(client, "PlainRequester", ["orchestration"])
+    provider = _register(client, "PlainProvider", ["analysis"])
+    outsider = _register(client, "PlainOutsider", ["audit"])
+    operator = _register(client, "PlainOperator", ["ops"])
+    _promote_to_operator("PlainOperator")
+    created = client.post(
+        "/v1/exchange/escrow",
+        headers=auth_header(requester["api_key"]),
+        json={"provider_id": provider["account"]["id"], "amount": 10},
+    )
+    assert created.status_code == 201, created.text
+    return {
+        "escrow_id": created.json()["escrow_id"],
+        "requester": requester,
+        "provider": provider,
+        "outsider": outsider,
+        "operator": operator,
+    }
+
+
+def test_binding_view_of_a_plain_escrow_is_party_or_operator_only(exchange_app, auth_header):
+    with TestClient(exchange_app) as client:
+        world = _plain_escrow_world(client, auth_header)
+        url = f"/v1/exchange/assurance/escrows/{world['escrow_id']}"
+        for who in ("requester", "provider", "operator"):
+            resp = client.get(url, headers=auth_header(world[who]["api_key"]))
+            assert resp.status_code == 200, (who, resp.text)
+        resp = client.get(url, headers=auth_header(world["outsider"]["api_key"]))
+        assert resp.status_code == 403, resp.text
+        assert "provider_available" not in resp.text
+
+
+def test_binding_view_and_budget_of_a_bound_escrow(exchange_app, auth_header):
+    """Parties, the approver, the operator and bound accounts read; an outsider does not."""
+    with TestClient(exchange_app) as client:
+        ctx = _bootstrap(client, auth_header, acceptance_required=True)
+        outsider = _register(client, "OutsiderBot", ["audit"])
+        observer = _register(client, "ObserverBot", ["audit"])
+        created = client.post(
+            "/v1/exchange/escrow",
+            headers={**auth_header(ctx["requester"]["api_key"]), "Idempotency-Key": "read-check"},
+            json={"provider_id": ctx["provider"]["account"]["id"], "amount": 10, "task_id": TASK},
+        )
+        assert created.status_code == 201, created.text
+        escrow_url = f"/v1/exchange/assurance/escrows/{created.json()['escrow_id']}"
+        budget_url = f"/v1/exchange/assurance/root-budgets/{ctx['root_budget_id']}"
+
+        def status(url, key):
+            return client.get(url, headers=auth_header(key)).status_code
+
+        for who in ("requester", "provider", "approver"):
+            assert status(escrow_url, ctx[who]["api_key"]) == 200, who
+        assert status(escrow_url, ctx["operator_key"]) == 200
+        assert status(budget_url, ctx["requester"]["api_key"]) == 200
+        assert status(budget_url, ctx["operator_key"]) == 200
+
+        for key in (outsider["api_key"], observer["api_key"]):
+            assert status(escrow_url, key) == 403
+            assert status(budget_url, key) == 403
+        # The provider is a party to the escrow, not to the budget.
+        assert status(budget_url, ctx["provider"]["api_key"]) == 403
+
+        bound = client.post(
+            "/v1/exchange/assurance/bind-account",
+            headers=auth_header(ctx["operator_key"]),
+            json={"account_id": observer["account"]["id"], "policy_id": ctx["policy_id"]},
+        )
+        assert bound.status_code == 200, bound.text
+        assert status(escrow_url, observer["api_key"]) == 200
+        assert status(budget_url, observer["api_key"]) == 200
+        assert status(escrow_url, outsider["api_key"]) == 403

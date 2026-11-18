@@ -71,6 +71,14 @@ def _operator(current: dict) -> None:
         raise HTTPException(status_code=403, detail="Only the exchange operator can bootstrap obligations")
 
 
+def _bound_to(session: Session, account_id: str, root_budget_id: str | None) -> bool:
+    """True when the operator bound this account to the given root budget."""
+    if not root_budget_id:
+        return False
+    account = session.get(Account, account_id)
+    return account is not None and account.root_budget_id == root_budget_id
+
+
 @router.post("/exchange/assurance/root-budgets", response_model=RootBudgetResponse)
 def create_root_budget(
     req: RootBudgetRequest,
@@ -199,8 +207,12 @@ def read_escrow_binding(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> dict:
-    """Read-only binding view. Does not approve or release."""
-    del current
+    """Read-only binding view. Does not approve or release.
+
+    Readable by an operator, the escrow's requester and provider, the policy's
+    authorized approver, and any account the operator bound to the escrow's
+    root budget (how an observer is given read access).
+    """
     with session.begin():
         escrow = session.get(Escrow, escrow_id)
         if escrow is None:
@@ -211,6 +223,13 @@ def read_escrow_binding(
         policy = None
         if escrow.obligation_policy_id:
             policy = session.get(ObligationPolicy, escrow.obligation_policy_id)
+        if not (
+            current.get("status") == "operator"
+            or current["id"] in (escrow.requester_id, escrow.provider_id)
+            or (policy is not None and current["id"] == policy.authorized_approver_id)
+            or _bound_to(session, current["id"], escrow.root_budget_id)
+        ):
+            raise HTTPException(status_code=403, detail="Not authorized")
         acceptance = None
         if policy is not None and escrow.delivered_artifact_sha256 and escrow.criteria_hash:
             acceptance = session.execute(
@@ -257,11 +276,17 @@ def read_root_budget(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> RootBudgetResponse:
-    del current
+    """Readable by an operator, the budget's principal, and accounts bound to it."""
     with session.begin():
         budget = session.get(RootBudget, root_budget_id)
         if budget is None:
             raise HTTPException(status_code=404, detail="Root budget not found")
+        if not (
+            current.get("status") == "operator"
+            or current["id"] == budget.principal_account_id
+            or _bound_to(session, current["id"], budget.id)
+        ):
+            raise HTTPException(status_code=403, detail="Not authorized")
         return RootBudgetResponse(
             root_budget_id=budget.id,
             limit_units=int(budget.limit_units),
