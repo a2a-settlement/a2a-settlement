@@ -1992,10 +1992,10 @@ def get_escrow(
     current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
 ) -> EscrowDetailResponse | OperatorEscrowDetailResponse:
-    """Return one escrow.
+    """Return one escrow to its requester, its provider or an operator.
 
     ``self_dealing_class`` is included only when the caller is an operator
-    account. For every other caller the key is absent, not null.
+    account. For the requester and the provider the key is absent, not null.
     """
     with session.begin():
         escrow = session.execute(
@@ -2005,6 +2005,8 @@ def get_escrow(
             raise HTTPException(status_code=404, detail="Escrow not found")
         if current.get("status") == "operator":
             return _operator_escrow_detail(escrow)
+        if current["id"] not in (escrow.requester_id, escrow.provider_id):
+            raise HTTPException(status_code=403, detail="Not authorized")
         return _escrow_detail(escrow)
 
 
