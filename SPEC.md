@@ -340,7 +340,7 @@ All error responses use a consistent envelope:
 | `POST` | `/exchange/resolve` | Operator | Resolve a disputed escrow (release or refund) |
 | `GET` | `/exchange/balance` | API Key | Check token balance |
 | `GET` | `/exchange/transactions` | API Key | List transaction history |
-| `GET` | `/exchange/escrows/{escrow_id}` | API Key | Get escrow details. Operator callers also receive `self_dealing_class`; the key is absent for all other callers |
+| `GET` | `/exchange/escrows/{escrow_id}` | API Key | Get escrow details. Only the escrow's requester, its provider and operator accounts may read it; any other account gets `403`. Operator callers also receive `self_dealing_class`; the key is absent for the requester and the provider |
 | `GET` | `/stats` | Public | Network health: supply, velocity, active escrows |
 
 ### 4.4. Account Registration
@@ -1002,7 +1002,9 @@ Agent A disputes escrow
 
 The `escrow.dispute_pending_mediation` event payload is identical to `escrow.disputed` (same `data` schema). Mediation services SHOULD fetch full escrow details via `GET /exchange/escrows/{escrow_id}` to obtain deliverables, acceptance criteria, and dispute reason before evaluating.
 
-When the caller is an operator account, the escrow detail also carries a top-level `self_dealing_class` (`arms_length`, `suspected_self_dealing`, `self_dealing`, or `null` when the escrow has no classification): the classification the exchange stored when the escrow was created. The field is operator-only. The requester, the provider and any other account receive a response without the key.
+When the caller is an operator account, the escrow detail also carries a top-level `self_dealing_class` (`arms_length`, `suspected_self_dealing`, `self_dealing`, or `null` when the escrow has no classification): the classification the exchange stored when the escrow was created. The field is operator-only. The requester and the provider receive a response without the key.
+
+Escrow detail is readable only by the escrow's requester, its provider and operator accounts. Any other authenticated account receives `403 Not authorized`; an unknown escrow id returns `404` for every caller.
 
 ### 7.4. Deliverable Verification
 
@@ -1110,7 +1112,7 @@ This section enumerates known threats and the mitigations A2A-SE provides.
 
 **Threat:** A malicious requester sends a fabricated `escrowId` in the `a2a-se` metadata, hoping the provider performs work without payment backing.
 
-**Mitigation:** The provider MUST verify the escrow exists and is valid by calling `GET /exchange/escrows/{escrow_id}` before beginning work. Providers SHOULD check that the escrow's `requester_id`, `provider_id`, and `amount` match expectations.
+**Mitigation:** The provider MUST verify the escrow exists and is valid by calling `GET /exchange/escrows/{escrow_id}` before beginning work. Providers SHOULD check that the escrow's `requester_id`, `provider_id`, and `amount` match expectations. A `403` on this call means the escrow names a different provider and MUST be treated as a failed verification.
 
 #### 9.1.2. Replay Attacks
 

@@ -1883,10 +1883,11 @@ paths:
       operationId: getEscrow
       summary: Get escrow details
       description: >-
-        Returns details for a specific escrow. When the caller is an operator
-        account the response also includes `self_dealing_class`
-        (OperatorEscrowDetailResponse). For every other caller the key is
-        absent.
+        Returns details for a specific escrow. Only the escrow's requester,
+        its provider and operator accounts may read it; any other account
+        receives 403. When the caller is an operator account the response
+        also includes `self_dealing_class` (OperatorEscrowDetailResponse).
+        For the requester and the provider the key is absent.
       security:
         - BearerAuth: []
       parameters:
@@ -1912,6 +1913,8 @@ paths:
                   - $ref: "#/components/schemas/OperatorEscrowDetailResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 

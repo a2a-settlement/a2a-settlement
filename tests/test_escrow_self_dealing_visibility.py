@@ -2,8 +2,8 @@
 
 The classification is stored on the escrow at creation. Operator callers (the
 dispute mediator authenticates as one) read it from the escrow detail. The
-requester, the provider and any other account must get a response that does
-not contain the key at all.
+requester and the provider must get a response that does not contain the key
+at all. Any other account is refused the escrow detail altogether.
 """
 
 from __future__ import annotations
@@ -193,7 +193,45 @@ def test_operator_sees_null_for_unclassified_escrow(exchange_app, auth_header):
         assert body[FIELD] is None
 
 
-@pytest.mark.parametrize("caller", ["requester_key", "provider_key", "outsider_key"])
+@pytest.mark.parametrize("link_confidence", [None, 0.6, 1.0])
+def test_non_party_is_refused_the_detail(exchange_app, auth_header, link_confidence):
+    """An account that is neither party nor operator gets no escrow data at all."""
+    with TestClient(exchange_app) as client:
+        world = _world(client, auth_header, link_confidence)
+
+        resp = client.get(
+            f"/v1/exchange/escrows/{world['escrow_id']}",
+            headers=auth_header(world["outsider_key"]),
+        )
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json() == {"detail": "Not authorized"}
+        assert "self_dealing" not in resp.text
+        assert "arms_length" not in resp.text
+
+
+def test_unknown_escrow_is_404_for_every_caller(exchange_app, auth_header):
+    with TestClient(exchange_app) as client:
+        world = _world(client, auth_header)
+
+        for key in ("requester_key", "provider_key", "outsider_key", "operator_key"):
+            resp = client.get(
+                "/v1/exchange/escrows/00000000-0000-0000-0000-000000000000",
+                headers=auth_header(world[key]),
+            )
+            assert resp.status_code == 404, resp.text
+
+
+def test_detail_requires_authentication(exchange_app, auth_header):
+    with TestClient(exchange_app) as client:
+        world = _world(client, auth_header)
+
+        resp = client.get(f"/v1/exchange/escrows/{world['escrow_id']}")
+
+        assert resp.status_code == 401, resp.text
+
+
+@pytest.mark.parametrize("caller", ["requester_key", "provider_key"])
 @pytest.mark.parametrize("link_confidence", [None, 0.6, 1.0])
 def test_non_operator_never_sees_class(exchange_app, auth_header, caller, link_confidence):
     with TestClient(exchange_app) as client:
@@ -207,7 +245,7 @@ def test_non_operator_never_sees_class(exchange_app, auth_header, caller, link_c
         assert "arms_length" not in resp.text
 
 
-@pytest.mark.parametrize("caller", ["requester_key", "provider_key", "outsider_key"])
+@pytest.mark.parametrize("caller", ["requester_key", "provider_key"])
 def test_non_operator_response_shape_is_unchanged(exchange_app, auth_header, caller):
     with TestClient(exchange_app) as client:
         world = _world(client, auth_header, 1.0)
