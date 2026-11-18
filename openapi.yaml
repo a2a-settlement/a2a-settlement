@@ -771,6 +771,24 @@ components:
           format: date-time
           nullable: true
 
+    OperatorEscrowDetailResponse:
+      description: >-
+        Escrow detail as returned to an operator caller: every property of
+        EscrowDetailResponse plus `self_dealing_class`. Non-operator callers,
+        including the requester and provider on the escrow, receive
+        EscrowDetailResponse, which has no `self_dealing_class` key.
+      allOf:
+        - $ref: "#/components/schemas/EscrowDetailResponse"
+        - type: object
+          properties:
+            self_dealing_class:
+              type: string
+              enum: [arms_length, suspected_self_dealing, self_dealing]
+              nullable: true
+              description: >-
+                Operator-only. Classification stored on the escrow when it was
+                created. Null when the escrow carries no classification.
+
     EscrowListResponse:
       type: object
       required: [escrows, total]
@@ -1864,7 +1882,11 @@ paths:
       tags: [Settlement]
       operationId: getEscrow
       summary: Get escrow details
-      description: Returns details for a specific escrow.
+      description: >-
+        Returns details for a specific escrow. When the caller is an operator
+        account the response also includes `self_dealing_class`
+        (OperatorEscrowDetailResponse). For every other caller the key is
+        absent.
       security:
         - BearerAuth: []
       parameters:
@@ -1885,7 +1907,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EscrowDetailResponse"
+                anyOf:
+                  - $ref: "#/components/schemas/EscrowDetailResponse"
+                  - $ref: "#/components/schemas/OperatorEscrowDetailResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":

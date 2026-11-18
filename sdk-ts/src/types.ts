@@ -319,6 +319,11 @@ export interface EscrowDetailResponse {
   delivered_at?: string;
   created_at?: string;
   resolved_at?: string;
+  /**
+   * Operator-only. Present (possibly null) when the caller is an operator
+   * account; absent for every other caller, including the escrow's parties.
+   */
+  self_dealing_class?: "arms_length" | "suspected_self_dealing" | "self_dealing" | null;
 }
 
 export interface EscrowListResponse {
