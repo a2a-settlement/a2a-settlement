@@ -63,6 +63,8 @@ services:
       MEDIATOR_PORT: "3100"
       MEDIATOR_LLM_MODEL: "${MEDIATOR_LLM_MODEL:-anthropic/claude-sonnet-5-5}"
       MEDIATOR_LLM_MODEL_SONNET: "${MEDIATOR_LLM_MODEL_SONNET:-anthropic/claude-sonnet-5-5}"
+      # Claude 5.x rejects a temperature parameter; "none" omits it.
+      MEDIATOR_LLM_TEMPERATURE: "${MEDIATOR_LLM_TEMPERATURE:-none}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_DEFENSE_API_KEY}"
       MEDIATOR_AUTO_RESOLVE_THRESHOLD: "0.80"
       MEDIATOR_AUDIT_LOG: "true"
