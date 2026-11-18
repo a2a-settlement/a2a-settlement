@@ -1,8 +1,12 @@
-# Deploying docs.a2a-settlement.org
+# Deploying the docs site
 
-This Docusaurus site is served at **docs.a2a-settlement.org** (and aliased at **docs.settlebridge.ai**).
+This Docusaurus site is served as static files. The examples below use
+`docs.example.com` and `/var/www/docs.example.com`; replace them with your own
+hostname and path (and, for the main deployment, the `a2a` user and
+`/opt/a2a-settlement` path used in [../DEPLOYMENT.md](../DEPLOYMENT.md), which are
+also examples).
 
-Production reverse proxy on the droplet is **Caddy** (`/etc/caddy/Caddyfile`), not nginx.
+The reverse proxy in these examples is **Caddy** (`/etc/caddy/Caddyfile`), not nginx.
 
 ## Build
 
@@ -23,20 +27,20 @@ currently breaks the build: webpack arrives only as a transitive dependency of
 `webpackbar` 6.0.1 passes. Upgrading Docusaurus is the real remedy; until then,
 keep the lockfile authoritative.
 
-## Deploy (this droplet)
+## Deploy
 
 ```bash
 cd docs-site && npm run build
-rsync -a --delete build/ /var/www/docs.a2a-settlement.org/
-# Caddy already serves /var/www/docs.a2a-settlement.org — no reload required for static-only updates
+rsync -a --delete build/ /var/www/docs.example.com/
+# Caddy already serves /var/www/docs.example.com — no reload required for static-only updates
 ```
 
 ## Caddy site block (reference)
 
 ```
-docs.a2a-settlement.org, docs.settlebridge.ai {
+docs.example.com {
 	encode zstd gzip
-	root * /var/www/docs.a2a-settlement.org
+	root * /var/www/docs.example.com
 
 	@docs_root path /docs /docs/
 	redir @docs_root /docs/intro/ permanent
@@ -59,4 +63,4 @@ HTML instead of `404` — which silently hides dangling references such as `og:i
 
 ## DNS
 
-Point `docs.a2a-settlement.org` to the droplet IP. TLS is automatic via Caddy.
+Point `docs.example.com` to your server's IP address. TLS is automatic via Caddy.

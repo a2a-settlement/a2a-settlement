@@ -1,5 +1,6 @@
-# Reference copy of /etc/systemd/system/a2a-exchange.service on the production
-# host. The file on the host is authoritative. See ../DEPLOYMENT.md.
+# Reference systemd unit for /etc/systemd/system/a2a-exchange.service. The user
+# (a2a) and install path (/opt/a2a-settlement) are examples; adjust them to your
+# host. See ../DEPLOYMENT.md.
 [Unit]
 Description=A2A Settlement Exchange (FastAPI)
 After=network-online.target docker.service
@@ -7,12 +8,12 @@ Wants=network-online.target docker.service
 
 [Service]
 Type=simple
-User=clawdbot
-Group=clawdbot
-WorkingDirectory=/home/clawdbot/a2a-settlement
+User=a2a
+Group=a2a
+WorkingDirectory=/opt/a2a-settlement
 EnvironmentFile=/etc/a2a-exchange/env
 
-ExecStart=/home/clawdbot/a2a-settlement/.venv/bin/gunicorn exchange.app:app --worker-class uvicorn.workers.UvicornWorker --workers 4 --timeout 120 --bind 127.0.0.1:8000
+ExecStart=/opt/a2a-settlement/.venv/bin/gunicorn exchange.app:app --worker-class uvicorn.workers.UvicornWorker --workers 4 --timeout 120 --bind 127.0.0.1:8000
 Restart=always
 RestartSec=2
 

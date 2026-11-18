@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BACKUP_DIR="/home/clawdbot/backups/exchange"
-MERKLE_DB="/home/clawdbot/a2a-settlement/compliance_merkle.db"
+# Example defaults; override via the environment to match your install.
+BACKUP_DIR="${BACKUP_DIR:-/opt/a2a-settlement/backups/exchange}"
+MERKLE_DB="${MERKLE_DB:-/opt/a2a-settlement/compliance_merkle.db}"
 TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
 RETAIN_DAYS=14
 

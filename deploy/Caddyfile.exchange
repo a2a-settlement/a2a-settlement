@@ -1,7 +1,7 @@
-# Reference copy of the exchange.a2a-settlement.org site block from
-# /etc/caddy/Caddyfile on the production host. The file on the host is
-# authoritative. See ../DEPLOYMENT.md.
-exchange.a2a-settlement.org {
+# Reference site block for /etc/caddy/Caddyfile. exchange.example.com and the
+# CORS origin below are placeholders; replace them with your own hostnames.
+# See ../DEPLOYMENT.md.
+exchange.example.com {
 	rate_limit {
 		zone exchange_api {
 			key {remote_host}
@@ -16,7 +16,7 @@ exchange.a2a-settlement.org {
 	redir @api_root /docs 302
 
 	@cors_origin {
-		header_regexp Origin ^https://(www\.)?a2a-settlement\.org$
+		header_regexp Origin ^https://(www\.)?example\.com$
 	}
 	header @cors_origin Access-Control-Allow-Origin "{http.request.header.Origin}"
 	header @cors_origin Access-Control-Allow-Methods "GET, POST, HEAD, OPTIONS"
