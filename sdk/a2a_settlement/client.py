@@ -356,6 +356,13 @@ class SettlementExchangeClient:
         attestor_id: str | None = None,
         attestor_signature: str | None = None,
     ) -> dict[str, Any]:
+        """Submit evidence for an escrow in its evidence window.
+
+        Encrypted evidence is not supported yet: the exchange rejects a
+        submission with ``encrypted=True`` (HTTP 400), because nothing can
+        decrypt it. Submit evidence in the clear and leave ``encrypted`` and
+        ``encryption_key_id`` unset.
+        """
         url = _join(self.base_url, f"/v1/exchange/escrow/{escrow_id}/evidence")
         payload: dict[str, Any] = {
             "evidence_type": evidence_type,

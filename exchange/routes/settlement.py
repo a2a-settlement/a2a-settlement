@@ -2308,6 +2308,24 @@ def get_vi_attestation(
 # ---------------------------------------------------------------------------
 
 
+def _reject_encrypted_evidence(encrypted: bool) -> None:
+    """Refuse evidence the submitter marked as encrypted.
+
+    Nothing can decrypt it yet: there is no key exchange and no ciphertext
+    format, so the mediator would withhold the submission and the party would
+    have submitted nothing while believing otherwise. The ``encrypted`` column
+    and response field stay so rows stored before this check still read back.
+    """
+    if encrypted:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Encrypted evidence is not supported yet. "
+                "Submit the evidence in the clear (omit 'encrypted' or set it to false)."
+            ),
+        )
+
+
 @router.post(
     "/exchange/escrow/{escrow_id}/evidence",
     response_model=EvidenceSubmissionResponse,
@@ -2344,6 +2362,8 @@ def submit_evidence(
             raise HTTPException(
                 status_code=400, detail="Evidence window has closed"
             )
+
+        _reject_encrypted_evidence(req.encrypted)
 
         for artifact in req.artifacts:
             if artifact.artifact_type == "inline":
@@ -2526,6 +2546,8 @@ def submit_oracle_evidence(
                 status_code=400,
                 detail=f"Oracle evidence cannot be submitted for escrow in status: {escrow.status}",
             )
+
+        _reject_encrypted_evidence(req.encrypted)
 
         for artifact in req.artifacts:
             if artifact.artifact_type == "inline":
