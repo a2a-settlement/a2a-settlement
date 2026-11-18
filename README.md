@@ -91,7 +91,7 @@ docker compose up -d
 curl http://localhost:3000/health
 ```
 
-See [docs/self-hosting.md](docs/self-hosting.md) for Fly.io, Railway, and environment variables.
+See [docs/self-hosting.md](docs/self-hosting.md) for Fly.io, Railway, and environment variables. [DEPLOYMENT.md](DEPLOYMENT.md) describes how the reference exchange is run.
 
 **Optional:** [a2a-settlement-auth](https://github.com/a2a-settlement/a2a-settlement-auth), Security Shim (`shim/`), [a2a-settlement-mediator](https://github.com/a2a-settlement/a2a-settlement-mediator), [a2a-settlement-dashboard](https://github.com/a2a-settlement/a2a-settlement-dashboard), [Self-Improving Agent Loop](docs/self-improving-agents.md).
 
