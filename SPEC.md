@@ -963,6 +963,8 @@ When either party flags a transaction as `disputed`, the exchange freezes the es
 5. The operator calls `POST /exchange/resolve` with the `escrow_id`, a `resolution` of `"release"` or `"refund"`, and an optional `strategy` identifying how the verdict was reached.
 6. The escrow settles according to the resolution. Reputation is updated as if the task completed or failed normally.
 
+**Evidence must be submitted in the clear.** The evidence submission endpoints (`POST /exchange/escrow/{escrow_id}/evidence` for the parties and `POST /exchange/escrow/{escrow_id}/oracle-evidence` for registered oracles) accept an `encrypted` flag, but encrypted evidence is not supported yet: the protocol defines no key exchange or ciphertext format, so no mediator can read it. The exchange MUST reject a submission with `encrypted: true` with HTTP 400 and a message telling the submitter to resubmit in the clear. Evidence responses keep the `encrypted` field; it is `false` for every new submission and MAY be `true` on submissions stored before this rule.
+
 ### 7.3.1. Pluggable Resolution Strategies
 
 The exchange supports pluggable dispute resolution via two mechanisms:

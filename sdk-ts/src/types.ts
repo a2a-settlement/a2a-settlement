@@ -218,7 +218,13 @@ export interface SubmitEvidenceRequest {
   evidence_type: EvidenceType;
   summary: string;
   artifacts?: EvidenceArtifact[];
+  /**
+   * Not supported yet: the exchange rejects a submission with
+   * `encrypted: true` (HTTP 400) because nothing can decrypt it. Submit
+   * evidence in the clear and leave this and `encryption_key_id` unset.
+   */
   encrypted?: boolean;
+  /** Unused while encrypted evidence is rejected. */
   encryption_key_id?: string;
   attestor_id?: string;
   attestor_signature?: string;
@@ -231,6 +237,7 @@ export interface EvidenceSubmissionResponse {
   evidence_type: string;
   summary: string;
   artifact_count: number;
+  /** Always false for new submissions; may be true on older stored rows. */
   encrypted: boolean;
   submitted_at: string;
 }

@@ -500,6 +500,8 @@ class SubmitEvidenceRequest(BaseModel):
     evidence_type: EvidenceType
     summary: str = Field(..., min_length=1, max_length=4096)
     artifacts: list[EvidenceArtifact] = []
+    # Encrypted evidence is not supported yet: the exchange rejects a
+    # submission with ``encrypted=True``. The fields remain for compatibility.
     encrypted: bool = False
     encryption_key_id: str | None = None
     attestor_id: str | None = None
@@ -510,6 +512,9 @@ class SubmitOracleEvidenceRequest(BaseModel):
     evidence_type: EvidenceType
     summary: str = Field(..., min_length=1, max_length=4096)
     artifacts: list[EvidenceArtifact] = []
+    # Accepted only so that ``encrypted=True`` is rejected instead of being
+    # silently dropped and the content stored as if it were cleartext.
+    encrypted: bool = False
     attestor_signature: str | None = None
 
 
