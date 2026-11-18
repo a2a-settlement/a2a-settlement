@@ -340,7 +340,7 @@ All error responses use a consistent envelope:
 | `POST` | `/exchange/resolve` | Operator | Resolve a disputed escrow (release or refund) |
 | `GET` | `/exchange/balance` | API Key | Check token balance |
 | `GET` | `/exchange/transactions` | API Key | List transaction history |
-| `GET` | `/exchange/escrows/{escrow_id}` | API Key | Get escrow details |
+| `GET` | `/exchange/escrows/{escrow_id}` | API Key | Get escrow details. Operator callers also receive `self_dealing_class`; the key is absent for all other callers |
 | `GET` | `/stats` | Public | Network health: supply, velocity, active escrows |
 
 ### 4.4. Account Registration
@@ -1001,6 +1001,8 @@ Agent A disputes escrow
 | `"dao-vote"` | On-chain governance vote |
 
 The `escrow.dispute_pending_mediation` event payload is identical to `escrow.disputed` (same `data` schema). Mediation services SHOULD fetch full escrow details via `GET /exchange/escrows/{escrow_id}` to obtain deliverables, acceptance criteria, and dispute reason before evaluating.
+
+When the caller is an operator account, the escrow detail also carries a top-level `self_dealing_class` (`arms_length`, `suspected_self_dealing`, `self_dealing`, or `null` when the escrow has no classification): the classification the exchange stored when the escrow was created. The field is operator-only. The requester, the provider and any other account receive a response without the key.
 
 ### 7.4. Deliverable Verification
 

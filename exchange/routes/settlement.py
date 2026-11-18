@@ -39,6 +39,7 @@ from exchange.schemas import (
     DisputeResponse,
     EscrowAttestationsResponse,
     EscrowDetailResponse,
+    OperatorEscrowDetailResponse,
     EscrowListResponse,
     EscrowRequest,
     EscrowResponse,
@@ -205,6 +206,19 @@ def _escrow_detail(escrow: Escrow) -> EscrowDetailResponse:
         workflow_locked=bool(escrow.workflow_locked),
         created_at=escrow.created_at,
         resolved_at=escrow.resolved_at,
+    )
+
+
+def _operator_escrow_detail(escrow: Escrow) -> OperatorEscrowDetailResponse:
+    """Escrow detail plus the stored self-dealing classification.
+
+    Only for operator callers. Everything else that serializes an escrow uses
+    ``_escrow_detail``, whose model has no ``self_dealing_class`` field.
+    """
+    detail = _escrow_detail(escrow)
+    return OperatorEscrowDetailResponse(
+        **{name: getattr(detail, name) for name in EscrowDetailResponse.model_fields},
+        self_dealing_class=escrow.self_dealing_class,
     )
 
 
@@ -1974,22 +1988,31 @@ def transactions(
 
 @router.get(
     "/exchange/escrows/{escrow_id}",
-    response_model=EscrowDetailResponse,
+    # Both models are listed so the generated schema documents each shape.
+    # Which one is serialized follows the type of the object returned below.
+    response_model=EscrowDetailResponse | OperatorEscrowDetailResponse,
     tags=["Settlement"],
 )
 @limiter.limit(settings.rate_limit_authenticated)
 def get_escrow(
     request: Request,
     escrow_id: str,
-    _current: dict = Depends(authenticate_bot),
+    current: dict = Depends(authenticate_bot),
     session: Session = Depends(get_session),
-) -> EscrowDetailResponse:
+) -> EscrowDetailResponse | OperatorEscrowDetailResponse:
+    """Return one escrow.
+
+    ``self_dealing_class`` is included only when the caller is an operator
+    account. For every other caller the key is absent, not null.
+    """
     with session.begin():
         escrow = session.execute(
             select(Escrow).where(Escrow.id == escrow_id)
         ).scalar_one_or_none()
         if escrow is None:
             raise HTTPException(status_code=404, detail="Escrow not found")
+        if current.get("status") == "operator":
+            return _operator_escrow_detail(escrow)
         return _escrow_detail(escrow)
 
 

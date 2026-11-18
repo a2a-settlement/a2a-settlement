@@ -666,6 +666,20 @@ class EscrowDetailResponse(BaseModel):
     resolved_at: datetime | None = None
 
 
+class OperatorEscrowDetailResponse(EscrowDetailResponse):
+    """Escrow detail as returned to an operator caller.
+
+    ``self_dealing_class`` is the classification stored on the escrow when it
+    was created. It is deliberately absent from ``EscrowDetailResponse``: the
+    requester, the provider and every other non-operator caller get a response
+    with no such key, so a party cannot learn how it was classified.
+    """
+
+    # 'arms_length' | 'suspected_self_dealing' | 'self_dealing', or null for an
+    # escrow that carries no classification.
+    self_dealing_class: str | None = None
+
+
 class EscrowListResponse(BaseModel):
     escrows: list[EscrowDetailResponse]
     total: int
