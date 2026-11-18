@@ -32,9 +32,20 @@ exchange.a2a-settlement.org {
 	# the bounty design guide without a separate DNS record.
 	# GET /mediator/health  →  mediator /health
 	# GET /mediator/guide   →  mediator /guide
+	# Only these two read-only routes are public. Every other mediator route
+	# is unauthenticated and must stay on 127.0.0.1, so it is answered here.
 	handle /mediator/* {
-		uri strip_prefix /mediator
-		reverse_proxy 127.0.0.1:3100
+		@mediator_public {
+			method GET HEAD
+			path /mediator/health /mediator/guide
+		}
+		handle @mediator_public {
+			uri strip_prefix /mediator
+			reverse_proxy 127.0.0.1:3100
+		}
+		handle {
+			respond "Not Found" 404
+		}
 	}
 
 	handle {

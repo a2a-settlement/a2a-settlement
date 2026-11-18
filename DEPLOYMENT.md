@@ -32,7 +32,9 @@ copies when they change.
 Caddy serves `exchange.a2a-settlement.org`:
 
 - `/` redirects to `/docs` (the OpenAPI UI).
-- `/mediator/*` is proxied to the mediator on `127.0.0.1:3100`, with the prefix stripped.
+- `GET /mediator/health` and `GET /mediator/guide` are proxied to the mediator on
+  `127.0.0.1:3100`, with the prefix stripped. Every other path under `/mediator/`
+  answers 404 at Caddy: the mediator's other routes are for callers on the host.
 - Everything else is proxied to the exchange on `127.0.0.1:8000`.
 - Requests are limited to 60 per minute per client address.
 - CORS is allowed from `https://a2a-settlement.org` and `https://www.a2a-settlement.org` only.
