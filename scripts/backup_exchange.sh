@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Example defaults; override via the environment to match your install.
-BACKUP_DIR="${BACKUP_DIR:-/opt/a2a-settlement/backups/exchange}"
-MERKLE_DB="${MERKLE_DB:-/opt/a2a-settlement/compliance_merkle.db}"
+# Defaults follow the checkout this script lives in: the Merkle database in the
+# repository root, backups in a "backups/exchange" directory beside the checkout.
+# Override either through the environment.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKUP_DIR="${BACKUP_DIR:-$(dirname "$REPO_DIR")/backups/exchange}"
+MERKLE_DB="${MERKLE_DB:-$REPO_DIR/compliance_merkle.db}"
 TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
 RETAIN_DAYS=14
 

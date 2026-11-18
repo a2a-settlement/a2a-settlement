@@ -95,10 +95,9 @@ Logs: `journalctl -u a2a-exchange`.
 ## Backups
 
 [`scripts/backup_exchange.sh`](scripts/backup_exchange.sh) dumps Postgres with
-`pg_dump` and snapshots the Merkle database into
-`/opt/a2a-settlement/backups/exchange`, keeping 14 days. The directory and the
-Merkle database path can be overridden with the `BACKUP_DIR` and `MERKLE_DB`
-environment variables. It can be installed as `/etc/cron.d/backup-exchange`.
+`pg_dump` and snapshots the Merkle database into a `backups/exchange` directory
+beside the checkout, keeping 14 days. The directory and the Merkle database path
+can be overridden with the `BACKUP_DIR` and `MERKLE_DB` environment variables. It can be installed as `/etc/cron.d/backup-exchange`.
 
 ## Secrets
 
