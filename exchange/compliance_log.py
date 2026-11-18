@@ -54,7 +54,6 @@ def log_settlement_event(
     dispute_reason: Optional[str] = None,
     resolution_strategy: Optional[str] = None,
     grounding_chain: Optional[dict] = None,
-    self_dealing_class: Optional[str] = None,
     fee_amount: int = 0,
     task_id: Optional[str] = None,
     task_type: Optional[str] = None,
@@ -74,6 +73,11 @@ def log_settlement_event(
             audit trail for ``escrow.delivered`` events.  Expected keys:
             ``search_queries``, ``chunk_count``, ``coverage``,
             ``source_uris``.
+
+    The escrow's self-dealing classification is deliberately not recorded.
+    Attestations are public, and the payload hash would let anyone recover a
+    withheld class by trying the three possible values, so the class stays on
+    the escrow row, where only an operator can read it.
 
     Returns the proof dict on success, None if compliance is disabled.
     """
@@ -108,11 +112,6 @@ def log_settlement_event(
                 if resolution_strategy
                 else f"grounding:{gc_summary}"
             )
-        if self_dealing_class and self_dealing_class != "arms_length":
-            sdc_tag = f"sdc:{self_dealing_class}"
-            extra_strategy = (
-                f"{extra_strategy}|{sdc_tag}" if extra_strategy else sdc_tag
-            )
 
         requester = PartyRef(did=f"did:a2a:{requester_id}", account_id=requester_id)
         provider = PartyRef(did=f"did:a2a:{provider_id}", account_id=provider_id)
@@ -125,7 +124,6 @@ def log_settlement_event(
             currency=currency,
             task_id=task_id,
             task_type=task_type,
-            self_dealing_class=self_dealing_class,
         )
 
         kind = attestation_kind

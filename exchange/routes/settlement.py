@@ -793,7 +793,6 @@ def instant_settle(
         status="settled",
         task_id=req.task_id,
         task_type=req.task_type,
-        self_dealing_class=instant_sdc,
         attestation_kind="release",
     )
 
@@ -1036,7 +1035,6 @@ def create_escrow(
         status="held",
         task_id=req.task_id,
         task_type=req.task_type,
-        self_dealing_class=escrow_sdc,
     )
 
     return EscrowResponse(
@@ -1129,7 +1127,6 @@ def deliver(
         status=escrow.status,
         task_id=escrow.task_id,
         task_type=escrow.task_type,
-        self_dealing_class=escrow.self_dealing_class,
         grounding_chain=grounding_chain,
     )
 
@@ -1304,7 +1301,6 @@ def partial_release(
         status=escrow.status,
         task_id=escrow.task_id,
         task_type=escrow.task_type,
-        self_dealing_class=escrow.self_dealing_class,
         attestation_kind="release",
         release_kind="partial",
     )
@@ -1487,7 +1483,6 @@ def release(
         status="released",
         task_id=escrow.task_id,
         task_type=escrow.task_type,
-        self_dealing_class=escrow.self_dealing_class,
         attestation_kind="release",
         release_kind="holdback" if is_holdback else "full",
     )
@@ -1628,7 +1623,6 @@ def refund(
         status=escrow.status,
         task_id=escrow.task_id,
         task_type=escrow.task_type,
-        self_dealing_class=escrow.self_dealing_class,
         attestation_kind="refund" if not is_holdback else "refund",
         refund_kind="holdback" if is_holdback else "full",
         refund_reason=req.reason,
@@ -1731,7 +1725,6 @@ def dispute(
         dispute_reason=req.reason,
         task_id=escrow.task_id,
         task_type=escrow.task_type,
-        self_dealing_class=escrow.self_dealing_class,
     )
 
     return DisputeResponse(
@@ -1893,7 +1886,6 @@ def resolve(
         dispute_reason=escrow.dispute_reason,
         task_id=escrow.task_id,
         task_type=escrow.task_type,
-        self_dealing_class=escrow.self_dealing_class,
         attestation_kind="dispute_resolution",
         resolution=req.resolution,
         stake_ruling=req.stake_ruling,

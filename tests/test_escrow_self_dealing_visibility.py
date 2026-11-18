@@ -318,3 +318,57 @@ def test_operator_refund_of_self_dealing_dispute(exchange_app, auth_header):
         assert after["status"] == "refunded"
         assert after["dispute_stake_status"] == "returned"
         assert after[FIELD] == "self_dealing"
+
+
+@pytest.mark.parametrize("link_confidence", [None, 0.6, 1.0])
+def test_public_attestations_never_carry_the_class(exchange_app, auth_header, link_confidence):
+    """The attestations endpoint needs no credentials, so it must not reveal the class.
+
+    Covers the release attestation and the dispute path, whose resolution
+    strategy used to carry an ``sdc:`` tag.
+    """
+    with TestClient(exchange_app) as client:
+        released = _world(client, auth_header, link_confidence)
+        provider_id = _detail(
+            client, auth_header, released["operator_key"], released["escrow_id"]
+        ).json()["provider_id"]
+        resp = client.post(
+            "/v1/exchange/release",
+            headers=auth_header(released["requester_key"]),
+            json={"escrow_id": released["escrow_id"]},
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = client.post(
+            "/v1/exchange/escrow",
+            headers=auth_header(released["requester_key"]),
+            json={"provider_id": provider_id, "amount": 20},
+        )
+        assert resp.status_code == 201, resp.text
+        disputed_id = resp.json()["escrow_id"]
+        resp = client.post(
+            "/v1/exchange/dispute",
+            headers=auth_header(released["requester_key"]),
+            json={"escrow_id": disputed_id, "reason": "not delivered", "stake_amount": STAKE},
+        )
+        assert resp.status_code == 200, resp.text
+        resp = client.post(
+            "/v1/exchange/resolve",
+            headers=auth_header(released["operator_key"]),
+            json={"escrow_id": disputed_id, "resolution": "refund"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        for escrow_id in (released["escrow_id"], disputed_id):
+            resp = client.get(f"/v1/exchange/escrow/{escrow_id}/attestations")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["enabled"] is True
+            assert body["attestations"], "expected at least one attestation"
+            for item in body["attestations"]:
+                settlement = item["payload"].get("settlement")
+                if settlement is not None:
+                    assert settlement[FIELD] is None
+            assert "self_dealing" not in resp.text.replace(f'"{FIELD}":null', "")
+            assert "arms_length" not in resp.text
+            assert "sdc:" not in resp.text

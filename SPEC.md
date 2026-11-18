@@ -1280,7 +1280,7 @@ A2A-SE defines three settlement outcome attestation types as canonical evidence 
 | `urn:a2a-se:escrow-refund-attestation:v1` | Escrow refund, holdback refund, or dependent auto-refund |
 | `urn:a2a-se:dispute-resolution-attestation:v1` | Operator or mediator dispute resolution |
 
-Each payload carries a shared `settlement` object with `escrow_id`, `settlement_kind: "a2a-se"`, requester/provider `did:a2a:` party refs, amount, fee, currency, rail, task metadata, self-dealing class, and timestamp. The payload is serialized with deterministic JSON (excluding `proof`), hashed with SHA-256, and appended to the exchange Merkle tree.
+Each payload carries a shared `settlement` object with `escrow_id`, `settlement_kind: "a2a-se"`, requester/provider `did:a2a:` party refs, amount, fee, currency, rail, task metadata, and timestamp. The `self_dealing_class` key is kept for schema compatibility and is always `null`: attestations are public, and the exchange's self-dealing classification is disclosed only to operators (see the escrow detail endpoint). The payload is serialized with deterministic JSON (excluding `proof`), hashed with SHA-256, and appended to the exchange Merkle tree.
 
 Downstream consumers -- including composite reputation systems, Concordia-style receipt substrates, and cross-extension conformance harnesses -- SHOULD reference these URNs as the canonical A2A-SE evidence classes rather than redefining settlement outcome shape. JSON Schemas are published under `schemas/`, and the citable schema guide is `docs/attestation-schemas.md`.
 
