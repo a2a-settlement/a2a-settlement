@@ -2153,6 +2153,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/RenewAttestationResponse"
 
+  /stats/recent-activity:
+    get:
+      tags: [Stats]
+      operationId: getRecentActivity
+      summary: Recent escrows
+      description: >-
+        Recent escrows, newest first. No authentication required. Each entry
+        carries `timestamp`, `outcome` and `status`. When the caller
+        authenticates as an operator, each entry also carries `id`,
+        `escrow_id`, `source_agent`, `target_agent`, `amount` and `task_id`.
+        Invalid credentials get `401`.
+      security:
+        - {}
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Recent escrows
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, total]
+                properties:
+                  total:
+                    type: integer
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [timestamp, outcome, status]
+                      properties:
+                        timestamp: {type: string}
+                        outcome: {type: string}
+                        status: {type: string}
+                        id: {type: string}
+                        escrow_id: {type: string}
+                        source_agent: {type: string}
+                        target_agent: {type: string}
+                        amount: {type: integer}
+                        task_id: {type: string, nullable: true}
+
   /stats:
     get:
       tags: [Stats]

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from exchange.auth import authenticate_bot_optional
 from exchange.config import get_session
 from exchange.models import Account, Balance, Escrow, Transaction
 from exchange.schemas import (
@@ -173,8 +174,18 @@ _ESCROW_STATUS_TO_OUTCOME = {
 def recent_activity(
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_session),
+    current: dict | None = Depends(authenticate_bot_optional),
 ) -> dict[str, Any]:
-    """Public endpoint: recent escrow settlements with bot names resolved."""
+    """Recent escrows, newest first.
+
+    Anyone may call this. Without operator credentials each entry carries only
+    ``timestamp``, ``outcome`` and ``status``: enough to show the exchange is
+    live, and nothing that says who paid whom, how much, or for which task. An
+    operator also gets the escrow id, both parties' names, the amount and the
+    task id.
+    """
+    full = current is not None and current.get("status") == "operator"
+
     with session.begin():
         rows = session.execute(
             select(Escrow)
@@ -182,29 +193,34 @@ def recent_activity(
             .limit(limit)
         ).scalars().all()
 
-        agent_ids = set()
-        for e in rows:
-            agent_ids.add(e.requester_id)
-            agent_ids.add(e.provider_id)
-
         names: dict[str, str] = {}
-        if agent_ids:
-            accts = session.execute(
-                select(Account.id, Account.bot_name).where(Account.id.in_(agent_ids))
-            ).all()
-            names = {str(a.id): a.bot_name for a in accts}
+        if full:
+            agent_ids = set()
+            for e in rows:
+                agent_ids.add(e.requester_id)
+                agent_ids.add(e.provider_id)
+            if agent_ids:
+                accts = session.execute(
+                    select(Account.id, Account.bot_name).where(Account.id.in_(agent_ids))
+                ).all()
+                names = {str(a.id): a.bot_name for a in accts}
 
-    entries = []
-    for e in rows:
-        entries.append({
-            "id": str(e.id),
-            "timestamp": (e.resolved_at or e.created_at).isoformat() if (e.resolved_at or e.created_at) else "",
-            "source_agent": names.get(e.requester_id, e.requester_id),
-            "target_agent": names.get(e.provider_id, e.provider_id),
-            "outcome": _ESCROW_STATUS_TO_OUTCOME.get(e.status, e.status),
-            "escrow_id": str(e.id),
-            "amount": int(e.amount),
-            "status": e.status,
-            "task_id": e.task_id,
-        })
+        entries = []
+        for e in rows:
+            when = e.resolved_at or e.created_at
+            entry: dict[str, Any] = {
+                "timestamp": when.isoformat() if when else "",
+                "outcome": _ESCROW_STATUS_TO_OUTCOME.get(e.status, e.status),
+                "status": e.status,
+            }
+            if full:
+                entry.update({
+                    "id": str(e.id),
+                    "source_agent": names.get(e.requester_id, e.requester_id),
+                    "target_agent": names.get(e.provider_id, e.provider_id),
+                    "escrow_id": str(e.id),
+                    "amount": int(e.amount),
+                    "task_id": e.task_id,
+                })
+            entries.append(entry)
     return {"entries": entries, "total": len(entries)}

@@ -157,7 +157,11 @@ class SettlementExchangeClient:
         return self._get(url)
 
     def recent_activity(self, *, limit: int = 20) -> dict[str, Any]:
-        """Fetch recent escrow activity with resolved bot names (no auth required)."""
+        """Fetch recent escrow activity.
+
+        Works without credentials, but then each entry has only ``timestamp``,
+        ``outcome`` and ``status``. Names, amounts and ids need an operator key.
+        """
         url = _join(self.base_url, "/v1/stats/recent-activity")
         return self._get(url, params={"limit": limit})
 
