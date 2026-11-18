@@ -1,0 +1,43 @@
+# Reference copy of the exchange.a2a-settlement.org site block from
+# /etc/caddy/Caddyfile on the production host. The file on the host is
+# authoritative. See ../DEPLOYMENT.md.
+exchange.a2a-settlement.org {
+	rate_limit {
+		zone exchange_api {
+			key {remote_host}
+			events 60
+			window 1m
+		}
+	}
+
+	# The API root has no landing route, so it answered 404 JSON. Send humans to
+	# the OpenAPI UI. Deliberately 302: a real GET / route would supersede this.
+	@api_root path /
+	redir @api_root /docs 302
+
+	@cors_origin {
+		header_regexp Origin ^https://(www\.)?a2a-settlement\.org$
+	}
+	header @cors_origin Access-Control-Allow-Origin "{http.request.header.Origin}"
+	header @cors_origin Access-Control-Allow-Methods "GET, POST, HEAD, OPTIONS"
+	header @cors_origin Access-Control-Allow-Headers "Content-Type"
+	header @cors_origin Vary Origin
+
+	@options method OPTIONS
+	handle @options {
+		respond "" 204
+	}
+
+	# Mediator endpoints — exposed under /mediator/* so agents can discover
+	# the bounty design guide without a separate DNS record.
+	# GET /mediator/health  →  mediator /health
+	# GET /mediator/guide   →  mediator /guide
+	handle /mediator/* {
+		uri strip_prefix /mediator
+		reverse_proxy 127.0.0.1:3100
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8000
+	}
+}
