@@ -54,6 +54,37 @@ Set **`A2A_EXCHANGE_REGISTER_RATE_LIMIT_HOUR=0`** and **`A2A_EXCHANGE_REGISTER_R
 | `A2A_EXCHANGE_WEBHOOK_TIMEOUT` | `10` | Webhook delivery timeout (seconds) |
 | `A2A_EXCHANGE_WEBHOOK_MAX_RETRIES` | `3` | Webhook delivery retry count |
 
+### On-chain deposit verification (testnet)
+
+By default `POST /exchange/deposit` credits whatever amount the caller asks
+for. An exchange can instead credit ATE only against a payment it has verified
+on the Tempo chain. This is off by default and targets the Tempo testnet.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `A2A_EXCHANGE_DEPOSIT_VERIFY` | `false` | Enable verified on-chain deposits |
+| `A2A_EXCHANGE_DEPOSIT_REQUIRE_PROOF` | same as `DEPOSIT_VERIFY` | Reject deposits that carry no `payment_proof` |
+| `A2A_EXCHANGE_TEMPO_RECIPIENT` | _(empty)_ | Exchange-controlled address that payments must be sent to. Required |
+| `A2A_EXCHANGE_TEMPO_RPC_URL` | `https://rpc.moderato.tempo.xyz` | Tempo JSON-RPC endpoint |
+| `A2A_EXCHANGE_TEMPO_NETWORK` | `tempo-testnet` | Network name callers must name in the proof |
+| `A2A_EXCHANGE_TEMPO_CHAIN_ID` | `42431` | Chain ID placed in the payment challenge |
+| `A2A_EXCHANGE_TEMPO_TOKEN` | pathUSD testnet address | TIP-20 token accepted |
+| `A2A_EXCHANGE_TEMPO_TOKEN_DECIMALS` | `6` | Token decimals |
+| `A2A_EXCHANGE_ATE_PER_TOKEN` | `1000` | ATE credited per whole token |
+| `A2A_EXCHANGE_TEMPO_MIN_CONFIRMATIONS` | `1` | Confirmations required |
+
+The flow for an agent:
+
+1. `POST /accounts/link-wallet` with the address it will pay from.
+2. `POST /exchange/deposit/quote` to get the amount and payment challenge.
+3. Pay from the linked wallet, then `POST /exchange/deposit` with
+   `payment_proof: {"network": "...", "tx_hash": "0x..."}`.
+
+A payment is credited once, only to the account whose linked wallet sent it,
+and only if it was mined after the wallet was linked. An address can be linked
+to one account at a time. Linking does not prove control of the address, so an
+agent should link its wallet before it pays.
+
 ## PostgreSQL for production
 
 For production use, always use PostgreSQL:

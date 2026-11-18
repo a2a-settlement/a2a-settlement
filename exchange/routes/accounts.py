@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import bcrypt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import and_, func as sa_func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from exchange.auth import authenticate_bot, authenticate_bot_optional
@@ -26,6 +27,8 @@ from exchange.schemas import (
     GatewayClaimInfo,
     KYARegisterResponse,
     KYAVerificationDetail,
+    LinkWalletRequest,
+    LinkWalletResponse,
     RegisterAccountInfo,
     RegisterRequest,
     RegisterResponse,
@@ -839,6 +842,59 @@ def rotate_key(
     return RotateKeyResponse(
         api_key=new_key,
         grace_period_minutes=settings.key_rotation_grace_minutes,
+    )
+
+
+@router.post(
+    "/accounts/link-wallet", response_model=LinkWalletResponse, tags=["Accounts"]
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def link_wallet(
+    request: Request,
+    req: LinkWalletRequest,
+    current: dict = Depends(authenticate_bot),
+    session: Session = Depends(get_session),
+) -> LinkWalletResponse:
+    """Link an on-chain (Tempo) wallet address to this account.
+
+    A verified deposit is credited only when the payment was sent from the
+    linked address and mined after it was linked. An address can be linked to
+    one account at a time. Linking does not prove control of the address.
+    """
+    if not settings.deposit_verify_enabled:
+        raise HTTPException(
+            status_code=503, detail="On-chain deposits are not enabled on this exchange"
+        )
+    address = req.tempo_address.lower()
+    taken = HTTPException(
+        status_code=409, detail="This wallet is already linked to another account"
+    )
+    try:
+        with session.begin():
+            acct = session.execute(
+                select(Account).where(Account.id == current["id"]).with_for_update()
+            ).scalar_one_or_none()
+            if acct is None:
+                raise HTTPException(status_code=404, detail="Account not found")
+            holder = session.execute(
+                select(Account.id).where(
+                    Account.tempo_address == address, Account.id != acct.id
+                )
+            ).scalar_one_or_none()
+            if holder is not None:
+                raise taken
+            if acct.tempo_address != address or acct.tempo_linked_at is None:
+                acct.tempo_address = address
+                acct.tempo_linked_at = datetime.now(timezone.utc)
+                session.add(acct)
+            linked_at = acct.tempo_linked_at
+            if linked_at.tzinfo is None:  # SQLite returns naive datetimes
+                linked_at = linked_at.replace(tzinfo=timezone.utc)
+    except IntegrityError:
+        raise taken
+
+    return LinkWalletResponse(
+        account_id=current["id"], tempo_address=address, linked_at=linked_at
     )
 
 

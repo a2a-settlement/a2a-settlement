@@ -25,7 +25,20 @@ from exchange.auth import authenticate_bot
 from exchange.financial_idempotency import Replay, lookup_replay, prepare, store
 from exchange.config import get_session, settings
 from exchange.ratelimit import limiter
-from exchange.models import Account, Balance, Escrow, EvidenceSubmission, Transaction
+from exchange.models import (
+    Account,
+    Balance,
+    Escrow,
+    EvidenceSubmission,
+    ProcessedDeposit,
+    Transaction,
+)
+from exchange.tempo_verify import (
+    PayerMismatchError,
+    TempoVerificationError,
+    build_push_challenge,
+    verify_transfer,
+)
 from exchange.schemas import (
     BalanceResponse,
     BatchEscrowRequest,
@@ -33,6 +46,8 @@ from exchange.schemas import (
     ComplianceBundleResponse,
     DeliverRequest,
     DeliverResponse,
+    DepositQuoteRequest,
+    DepositQuoteResponse,
     DepositRequest,
     DepositResponse,
     DisputeRequest,
@@ -578,6 +593,200 @@ def _check_kya_gate(
     }
 
 
+def _token_base_units_for_ate(ate: int) -> int:
+    """Token base units (e.g. pathUSD 6dp) required to buy ``ate`` ATE."""
+    scale = 10 ** settings.tempo_token_decimals
+    # ceil(ate / ate_per_token * scale)
+    return -(-(ate * scale) // settings.ate_per_token)
+
+
+def _ate_for_token_amount(base_units: int) -> int:
+    scale = 10 ** settings.tempo_token_decimals
+    return (base_units * settings.ate_per_token) // scale
+
+
+def _require_onchain_deposits() -> None:
+    if not settings.deposit_verify_enabled:
+        raise HTTPException(
+            status_code=503, detail="On-chain deposits are not enabled on this exchange"
+        )
+    if not settings.tempo_recipient:
+        raise HTTPException(
+            status_code=503, detail="Exchange deposit address is not configured"
+        )
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+@router.post(
+    "/exchange/deposit/quote",
+    status_code=200,
+    response_model=DepositQuoteResponse,
+    tags=["Settlement"],
+)
+@limiter.limit(settings.rate_limit_authenticated)
+def deposit_quote(
+    request: Request,
+    req: DepositQuoteRequest,
+    current: dict = Depends(authenticate_bot),
+) -> DepositQuoteResponse:
+    """Return an x402 payment challenge for buying ``ate`` ATE with pathUSD.
+
+    The caller pays the challenge with mppx (push mode) from its linked
+    wallet, then submits the tx hash to ``/exchange/deposit`` to be credited.
+    """
+    _require_onchain_deposits()
+
+    amount_base_units = _token_base_units_for_ate(req.ate)
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=15)).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z"
+    )
+    challenge = build_push_challenge(
+        challenge_id=f"deposit-{uuid.uuid4().hex[:12]}",
+        realm=settings.tempo_realm,
+        recipient=settings.tempo_recipient,
+        token=settings.tempo_token,
+        chain_id=settings.tempo_chain_id,
+        amount_base_units=amount_base_units,
+        description=f"Buy {req.ate} ATE",
+        expires_iso=expires,
+    )
+    scale = 10 ** settings.tempo_token_decimals
+    return DepositQuoteResponse(
+        network=settings.tempo_network,
+        recipient=settings.tempo_recipient,
+        token=settings.tempo_token,
+        chain_id=settings.tempo_chain_id,
+        ate=req.ate,
+        amount_base_units=str(amount_base_units),
+        amount_display=f"{amount_base_units / scale:.{settings.tempo_token_decimals}f}",
+        challenge=challenge,
+        expires=expires,
+    )
+
+
+def _verified_deposit(
+    req: DepositRequest, current: dict, session: Session
+) -> DepositResponse:
+    """Credit ATE against an on-chain payment from the account's linked wallet."""
+    _require_onchain_deposits()
+    proof = req.payment_proof
+    if proof.network != settings.tempo_network:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This exchange accepts payments on {settings.tempo_network} only",
+        )
+    tx_hash = proof.tx_hash.lower()
+
+    with session.begin():
+        acct = session.get(Account, current["id"])
+        if acct is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        linked = acct.tempo_address
+        linked_at = acct.tempo_linked_at
+    # Without a linked wallet, anyone who saw the transaction on the public
+    # chain could claim it, so the payer must be bound to the account first.
+    if not linked or linked_at is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Link a wallet with POST /accounts/link-wallet before depositing",
+        )
+
+    # Verify on-chain outside any DB transaction (network call).
+    try:
+        verified = verify_transfer(
+            tx_hash=tx_hash,
+            recipient=settings.tempo_recipient,
+            token=settings.tempo_token,
+            expected_payer=linked,
+            rpc_url=settings.tempo_rpc_url,
+            min_confirmations=settings.tempo_min_confirmations,
+            timeout=settings.tempo_rpc_timeout_seconds,
+        )
+    except PayerMismatchError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except TempoVerificationError as exc:
+        raise HTTPException(status_code=402, detail=str(exc))
+
+    # A payment made before the wallet was linked is not accepted: otherwise
+    # an account could link someone else's address after seeing their payment.
+    if verified.block_timestamp < _as_utc(linked_at).timestamp():
+        raise HTTPException(
+            status_code=403,
+            detail="Payment was made before this wallet was linked to the account",
+        )
+
+    credited = _ate_for_token_amount(verified.amount)
+    if credited <= 0:
+        raise HTTPException(
+            status_code=422, detail="Verified payment is too small to credit any ATE"
+        )
+
+    already = HTTPException(
+        status_code=409, detail="This payment receipt has already been credited"
+    )
+    deposit_id = str(uuid.uuid4())
+    try:
+        with session.begin():
+            bal = session.execute(
+                _lock(select(Balance).where(Balance.account_id == current["id"]))
+            ).scalar_one_or_none()
+            if bal is None:
+                raise HTTPException(status_code=404, detail="Account not found")
+
+            acct = session.get(Account, current["id"])
+            if acct is None or acct.tempo_address != linked:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The linked wallet changed during verification; retry",
+                )
+
+            # Replay protection: a given tx hash credits at most once.
+            if session.get(ProcessedDeposit, tx_hash) is not None:
+                raise already
+
+            bal.available += credited
+            session.add(bal)
+            session.add(
+                ProcessedDeposit(
+                    tx_hash=tx_hash,
+                    network=settings.tempo_network,
+                    account_id=current["id"],
+                    token=verified.token,
+                    paid_amount=verified.amount,
+                    credited_ate=credited,
+                    payer=verified.payer,
+                )
+            )
+            session.add(
+                Transaction(
+                    escrow_id=None,
+                    from_account=None,
+                    to_account=current["id"],
+                    amount=credited,
+                    tx_type="deposit",
+                    description=f"x402 deposit {settings.tempo_network} tx={tx_hash}",
+                )
+            )
+            new_balance = int(bal.available)
+    except IntegrityError:
+        # Lost a race on the unique tx hash: already credited.
+        raise already
+
+    return DepositResponse(
+        deposit_id=deposit_id,
+        account_id=current["id"],
+        amount=credited,
+        currency=req.currency,
+        new_balance=new_balance,
+        reference=tx_hash,
+        verified=True,
+        payment_tx=tx_hash,
+    )
+
+
 @router.post(
     "/exchange/deposit",
     status_code=201,
@@ -594,6 +803,18 @@ def deposit(
     if req.amount <= 0:
         raise HTTPException(status_code=400, detail="Deposit amount must be positive")
 
+    if req.payment_proof is not None:
+        return _verified_deposit(req, current, session)
+    if settings.deposit_require_proof:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                "This exchange credits deposits only against a verified payment. "
+                "Get a quote from POST /exchange/deposit/quote and submit payment_proof."
+            ),
+        )
+
+    # Unverified path: the exchange trusts the caller's amount.
     with session.begin():
         bal = session.execute(
             _lock(select(Balance).where(Balance.account_id == current["id"]))
