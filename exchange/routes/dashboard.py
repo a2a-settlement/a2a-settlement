@@ -470,6 +470,8 @@ def force_refund(
                 description="Force refund by operator",
             )
         )
+        # A disputed escrow carries the filer's stake; return it with the refund.
+        _return_dispute_stake(session, escrow)
 
     return {"escrow_id": escrow_id, "status": "refunded", "amount_returned": total_held}
 
@@ -629,6 +631,9 @@ def override_dispute_resolution(
                 tx_type="escrow_refund", description="Dashboard override — refunded",
             ))
 
+        # The override carries no stake ruling, so the filer's stake is returned.
+        _return_dispute_stake(session, escrow)
+
     return {"escrow_id": escrow_id, "resolution": resolution, "status": escrow.status}
 
 
@@ -780,6 +785,12 @@ def get_trust_policy(authorization: str | None = Header(default=None)):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _return_dispute_stake(session: Session, escrow: Escrow) -> None:
+    from exchange.routes.settlement import _settle_dispute_stake
+
+    _settle_dispute_stake(session, escrow, None)
 
 
 def _check_dashboard_key(authorization: str | None) -> None:
