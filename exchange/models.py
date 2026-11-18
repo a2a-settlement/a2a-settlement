@@ -166,6 +166,16 @@ class Account(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # On-chain wallet linked for x402/Tempo deposits. A verified deposit is
+    # credited only when the payment came from this address and was mined
+    # after it was linked. An address can be linked to one account at a time.
+    tempo_address: Mapped[str | None] = mapped_column(
+        String(42), nullable=True, unique=True, index=True
+    )
+    tempo_linked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     balance: Mapped["Balance"] = relationship(
         back_populates="account", uselist=False, cascade="all, delete-orphan"
     )
@@ -412,6 +422,30 @@ class Transaction(Base):
         String(30), nullable=True, index=True
     )
     fee_class: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ProcessedDeposit(Base):
+    """Replay-protection ledger for verified on-chain deposit receipts.
+
+    The on-chain transaction hash is the primary key, so a payment can credit
+    ATE at most once across the whole exchange.
+    """
+
+    __tablename__ = "processed_deposits"
+
+    tx_hash: Mapped[str] = mapped_column(String(66), primary_key=True)
+    network: Mapped[str] = mapped_column(String(40), nullable=False)
+    account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    token: Mapped[str] = mapped_column(String(42), nullable=False)
+    # Paid amount in token base units (e.g. pathUSD has 6 decimals).
+    paid_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    credited_ate: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payer: Mapped[str] = mapped_column(String(42), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

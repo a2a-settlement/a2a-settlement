@@ -169,10 +169,20 @@ class ClaimListResponse(BaseModel):
 # --- Deposit ---
 
 
+class PaymentProof(BaseModel):
+    """An on-chain payment receipt the exchange verifies before crediting."""
+
+    network: str = "tempo-testnet"
+    tx_hash: str = Field(..., pattern=r"^0x[0-9a-fA-F]{64}$")
+
+
 class DepositRequest(BaseModel):
     amount: int = Field(..., gt=0)
     currency: str = "ATE"
     reference: str | None = None
+    # When present, the exchange credits ATE derived from the verified payment
+    # and ignores ``amount``.
+    payment_proof: PaymentProof | None = None
 
 
 class DepositResponse(BaseModel):
@@ -182,6 +192,34 @@ class DepositResponse(BaseModel):
     currency: str
     new_balance: int
     reference: str | None = None
+    verified: bool = False
+    payment_tx: str | None = None
+
+
+class DepositQuoteRequest(BaseModel):
+    ate: int = Field(..., gt=0, description="Amount of ATE to purchase")
+
+
+class DepositQuoteResponse(BaseModel):
+    network: str
+    recipient: str
+    token: str
+    chain_id: int
+    ate: int
+    amount_base_units: str
+    amount_display: str
+    challenge: str
+    expires: str
+
+
+class LinkWalletRequest(BaseModel):
+    tempo_address: str = Field(..., pattern=r"^0x[0-9a-fA-F]{40}$")
+
+
+class LinkWalletResponse(BaseModel):
+    account_id: str
+    tempo_address: str
+    linked_at: datetime
 
 
 # --- Settlement ---

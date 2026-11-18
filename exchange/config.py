@@ -153,6 +153,35 @@ class Settings:
     kya_operator_did: str = os.getenv("A2A_EXCHANGE_KYA_OPERATOR_DID", "did:web:exchange.a2a-settlement.org")
     kya_operator_private_key_path: str = os.getenv("A2A_EXCHANGE_KYA_OPERATOR_KEY_PATH", "")
 
+    # --- x402 / Tempo on-chain deposit verification (testnet) ---
+    # When enabled, /exchange/deposit credits ATE against a verified on-chain
+    # payment (a Tempo tx hash) from the account's linked wallet instead of
+    # trusting the caller. Off by default, so behaviour is unchanged.
+    deposit_verify_enabled: bool = _get_bool("A2A_EXCHANGE_DEPOSIT_VERIFY", False)
+    # Reject deposits that carry no payment proof. Follows
+    # deposit_verify_enabled unless set, so turning verification on also
+    # closes the unverified path.
+    deposit_require_proof: bool = _get_bool(
+        "A2A_EXCHANGE_DEPOSIT_REQUIRE_PROOF", deposit_verify_enabled
+    )
+    tempo_network: str = os.getenv("A2A_EXCHANGE_TEMPO_NETWORK", "tempo-testnet")
+    tempo_rpc_url: str = os.getenv(
+        "A2A_EXCHANGE_TEMPO_RPC_URL", "https://rpc.moderato.tempo.xyz"
+    )
+    tempo_chain_id: int = _get_int("A2A_EXCHANGE_TEMPO_CHAIN_ID", 42431)
+    # pathUSD (TIP-20) on Tempo testnet, 6 decimals.
+    tempo_token: str = os.getenv(
+        "A2A_EXCHANGE_TEMPO_TOKEN", "0x20c0000000000000000000000000000000000000"
+    )
+    tempo_token_decimals: int = _get_int("A2A_EXCHANGE_TEMPO_TOKEN_DECIMALS", 6)
+    # The exchange-controlled address that payments must be sent to.
+    tempo_recipient: str = os.getenv("A2A_EXCHANGE_TEMPO_RECIPIENT", "")
+    tempo_min_confirmations: int = _get_int("A2A_EXCHANGE_TEMPO_MIN_CONFIRMATIONS", 1)
+    tempo_rpc_timeout_seconds: int = _get_int("A2A_EXCHANGE_TEMPO_RPC_TIMEOUT", 20)
+    tempo_realm: str = os.getenv("A2A_EXCHANGE_TEMPO_REALM", "a2a-settlement")
+    # ATE credited per 1 whole token (pathUSD). e.g. 1000 ATE per 1 pathUSD.
+    ate_per_token: int = _get_int("A2A_EXCHANGE_ATE_PER_TOKEN", 1000)
+
     # Operator API key — if set, a bootstrap operator account is created at startup
     operator_api_key: str = os.getenv("A2A_EXCHANGE_OPERATOR_API_KEY", "")
 

@@ -12,6 +12,8 @@ _ACCOUNT_COLUMNS = {
     "obligation_policy_id": "VARCHAR(36)",
     "root_budget_id": "VARCHAR(36)",
     "is_test": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "tempo_address": "VARCHAR(42)",
+    "tempo_linked_at": "TIMESTAMP WITH TIME ZONE",
 }
 _ESCROW_COLUMNS = {
     "obligation_policy_id": "VARCHAR(36)",
@@ -36,8 +38,22 @@ def _add_missing(engine: Engine, table: str, columns: dict[str, str]) -> None:
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
+def _ensure_unique_tempo_address(engine: Engine) -> None:
+    """A wallet may be linked to one account; enforce it on existing volumes."""
+    if "accounts" not in inspect(engine).get_table_names():
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_accounts_tempo_address "
+                "ON accounts (tempo_address)"
+            )
+        )
+
+
 def ensure_assurance_schema(engine: Engine) -> None:
     _add_missing(engine, "accounts", _ACCOUNT_COLUMNS)
+    _ensure_unique_tempo_address(engine)
     _add_missing(engine, "escrows", _ESCROW_COLUMNS)
     from sqlalchemy.orm import sessionmaker
 
